@@ -1,0 +1,29 @@
+[package]
+name = "pyrunner"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "pr"
+crate-type = ["cdylib"]
+
+[[bin]]
+name = "pyrunner_demo"
+path = "src/main.rs"
+
+[dependencies]
+android_logger = "0.15.1"
+jni = "0.21.1"
+log = "0.4.28"
+thiserror = "2.0.17"
+tokio = { version = "1.0", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+env_logger = "0.10"
+
+[dependencies.pyo3]
+version = "0.26.0"
+features = ["auto-initialize"]
+
+[dev-dependencies]
+bindgen = "0.72.1"
