@@ -1,21 +1,12 @@
+use crate::error::Result;
 use jni::JNIEnv;
-use jni::errors::Error as JniError;
 use jni::objects::JClass;
 #[allow(unused_imports)]
 use jni::sys::{jboolean, jfloat, jint, jstring};
 #[allow(unused_imports)]
 use log::{debug, error, info, trace, warn};
-use thiserror;
 
 const TAG: &str = "libpr";
-
-#[derive(thiserror::Error, Debug)]
-enum Error {
-    #[error("PDF2WPS error: {0}")]
-    Pdf2WpsError(String),
-    #[error(transparent)]
-    JniError(#[from] JniError),
-}
 
 // 初始化日志记录器的辅助函数
 fn init_logger() {
@@ -171,7 +162,7 @@ pub extern "system" fn Java_com_example_TypeConverter_processString(
     }
 }
 
-fn jstring_to_string(env: &mut JNIEnv, jstring: jstring) -> Result<String, Error> {
+fn jstring_to_string(env: &mut JNIEnv, jstring: jstring) -> Result<String> {
     Ok(env
         .get_string(&unsafe { jni::objects::JString::from_raw(jstring) })?
         .into())
@@ -182,7 +173,7 @@ fn _pdf2wps(
     pdf_path: jstring,
     pdf_password: jstring,
     wps_path: jstring,
-) -> Result<(), Error> {
+) -> Result<()> {
     let pdf_path: String = jstring_to_string(env, pdf_path)?;
     let pdf_password: String = jstring_to_string(env, pdf_password)?;
     let wps_path: String = jstring_to_string(env, wps_path)?;

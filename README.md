@@ -147,8 +147,22 @@ use pyrunner::progress_monitor::{
     ProcessTaskExecutor, ProgressListener
 };
 
-// 创建Python脚本执行器
-let executor = ProcessTaskExecutor::new("my_script.py".to_string());
+// 创建任务执行器（不再启动子进程）
+let task_fn = || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use std::thread;
+    use std::time::Duration;
+    
+    // 模拟一些计算工作
+    for i in 1..=10 {
+        thread::sleep(Duration::from_millis(100));
+        println!("处理步骤 {}/10", i);
+    }
+    
+    println!("任务完成");
+    Ok(())
+};
+
+let executor = ProcessTaskExecutor::new(task_fn);
 
 // 创建监听器
 let listeners = vec![

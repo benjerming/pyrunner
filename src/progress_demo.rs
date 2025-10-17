@@ -1,18 +1,27 @@
-use crate::message_receiver::MessageReceiver;
-use crate::message_sender::create_message_channel;
+use crate::error::Result;
 use crate::progress_monitor::{
-    ConsoleProgressListener, ProgressInfo, ProgressListener,
-    run_task_with_monitoring, ThreadTaskExecutor, ProcessTaskExecutor,
+    ConsoleProgressListener, ProcessTaskExecutor, ProgressListener, ThreadTaskExecutor,
+    run_task_with_monitoring,
 };
 use log::error;
-use std::thread;
-use std::time::Duration;
 
-/// 演示子线程任务执行
 pub fn demo_thread_task() {
     println!("🧵 开始演示子线程任务执行\n");
 
-    let executor = ThreadTaskExecutor::new(1, 10); // 1秒，10步
+    let task_fn = || -> Result<()> {
+        use std::thread;
+        use std::time::Duration;
+
+        for i in 1..=5 {
+            thread::sleep(Duration::from_millis(200));
+            println!("执行步骤 {}/5", i);
+        }
+
+        println!("线程任务执行成功");
+        Ok(())
+    };
+
+    let executor = ThreadTaskExecutor::new(task_fn);
     let listeners = vec![Box::new(ConsoleProgressListener) as Box<dyn ProgressListener>];
 
     match run_task_with_monitoring("thread_task".to_string(), executor, listeners) {
@@ -21,11 +30,23 @@ pub fn demo_thread_task() {
     }
 }
 
-/// 演示子进程任务执行
 pub fn demo_process_task() {
     println!("🐍 开始演示子进程任务执行\n");
 
-    let executor = ProcessTaskExecutor::new("src/demo_progress.py".to_string());
+    let task_fn = || -> Result<()> {
+        use std::thread;
+        use std::time::Duration;
+
+        for i in 1..=5 {
+            thread::sleep(Duration::from_millis(200));
+            println!("执行步骤 {}/5", i);
+        }
+
+        println!("任务执行成功");
+        Ok(())
+    };
+
+    let executor = ProcessTaskExecutor::new(task_fn);
     let listeners = vec![Box::new(ConsoleProgressListener) as Box<dyn ProgressListener>];
 
     match run_task_with_monitoring("process_task".to_string(), executor, listeners) {
@@ -34,18 +55,14 @@ pub fn demo_process_task() {
     }
 }
 
-
-/// 运行所有演示
 pub fn run_all_demos() {
     println!("🎯 开始运行进度监控演示\n");
     println!("{}", "=".repeat(60));
 
-    // 子线程任务演示
     demo_thread_task();
 
     println!("\n{}", "=".repeat(60));
 
-    // 子进程任务演示
     demo_process_task();
 
     println!("\n{}", "=".repeat(60));
@@ -53,3 +70,17 @@ pub fn run_all_demos() {
     println!("\n🎊 所有演示完成！");
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_demo_thread_task() {
+        demo_thread_task();
+    }
+
+    #[test]
+    fn test_demo_process_task() {
+        demo_process_task();
+    }
+}

@@ -1,21 +1,17 @@
 use crate::message_sender::ProgressInfo;
+#[allow(unused_imports)]
 use log::{debug, error, info};
 use std::sync::mpsc;
 use std::time::Duration;
 
-/// 进度监听器trait
 pub trait ProgressListener: Send + Sync {
-    /// 当进度更新时调用
     fn on_progress_update(&self, progress: &ProgressInfo);
 
-    /// 当任务完成时调用
     fn on_task_completed(&self, progress: &ProgressInfo);
 
-    /// 当任务出错时调用
     fn on_task_error(&self, progress: &ProgressInfo);
 }
 
-/// 控制台进度监听器实现
 pub struct ConsoleProgressListener;
 
 impl ProgressListener for ConsoleProgressListener {
@@ -42,7 +38,6 @@ impl ProgressListener for ConsoleProgressListener {
     }
 }
 
-/// 消息接收器
 pub struct MessageReceiver {
     receiver: mpsc::Receiver<ProgressInfo>,
     listeners: Vec<Box<dyn ProgressListener>>,
@@ -50,7 +45,6 @@ pub struct MessageReceiver {
 }
 
 impl MessageReceiver {
-    /// 创建新的消息接收器
     pub fn new(receiver: mpsc::Receiver<ProgressInfo>) -> Self {
         Self {
             receiver,
@@ -59,21 +53,18 @@ impl MessageReceiver {
         }
     }
 
-    /// 添加进度监听器
     pub fn add_listener(&mut self, listener: Box<dyn ProgressListener>) {
         self.listeners.push(listener);
     }
 
-    /// 启动监听循环（阻塞）
     pub fn start_listening(&self) {
-        info!("开始监听进度更新...");
+        info!("开始监听...");
 
         loop {
             match self.receiver.recv_timeout(self.timeout) {
                 Ok(progress) => {
                     debug!("收到进度更新: {:?}", progress);
 
-                    // 通知所有监听器
                     for listener in &self.listeners {
                         if progress.has_error {
                             listener.on_task_error(&progress);
@@ -84,36 +75,31 @@ impl MessageReceiver {
                         }
                     }
 
-                    // 如果任务完成或出错，退出监听循环
                     if progress.is_completed || progress.has_error {
                         break;
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // 超时，继续等待
                     continue;
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    info!("消息发送器已断开连接，停止监听");
+                    info!("发送器已断开连接，停止监听");
                     break;
                 }
             }
         }
 
-        info!("消息接收器监听结束");
+        info!("监听结束");
     }
-
 }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_sender::{MessageSender, create_message_channel};
+    use crate::message_sender::create_message_channel;
     use std::sync::{Arc, Mutex};
     use std::thread;
 
-    /// 测试用的监听器，记录收到的消息
     struct TestProgressListener {
         messages: Arc<Mutex<Vec<String>>>,
     }
@@ -153,7 +139,6 @@ mod tests {
         let (test_listener, messages) = TestProgressListener::new();
         message_receiver.add_listener(Box::new(test_listener));
 
-        // 在另一个线程中发送消息
         let sender_clone = sender.clone();
         thread::spawn(move || {
             sender_clone.send_task_started("test_task".to_string());
@@ -163,10 +148,8 @@ mod tests {
             sender_clone.send_task_completed("test_task".to_string());
         });
 
-        // 处理消息
         message_receiver.start_listening();
 
-        // 检查收到的消息
         let messages = messages.lock().unwrap();
         assert_eq!(messages.len(), 3);
         assert!(messages[0].contains("progress: 0"));

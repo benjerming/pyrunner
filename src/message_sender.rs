@@ -2,24 +2,15 @@ use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc;
 
-/// 进度信息结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressInfo {
-    /// 任务ID
     pub task_id: String,
-    /// 当前进度百分比 (0-100)
     pub percentage: f64,
-    /// 进度描述信息
     pub message: String,
-    /// 当前步骤
     pub current_step: u32,
-    /// 总步骤数
     pub total_steps: u32,
-    /// 是否完成
     pub is_completed: bool,
-    /// 是否出错
     pub has_error: bool,
-    /// 错误信息
     pub error_message: Option<String>,
 }
 
@@ -57,19 +48,16 @@ impl ProgressInfo {
     }
 }
 
-/// 消息发送器
 #[derive(Clone)]
 pub struct MessageSender {
     sender: mpsc::Sender<ProgressInfo>,
 }
 
 impl MessageSender {
-    /// 创建新的消息发送器
     pub fn new(sender: mpsc::Sender<ProgressInfo>) -> Self {
         Self { sender }
     }
 
-    /// 发送进度更新
     pub fn send_progress(
         &self,
         progress: ProgressInfo,
@@ -78,47 +66,42 @@ impl MessageSender {
         self.sender.send(progress)
     }
 
-    /// 发送进度更新（忽略错误）
     pub fn send_progress_safe(&self, progress: ProgressInfo) {
         if let Err(e) = self.send_progress(progress) {
             error!("发送进度更新失败: {}", e);
         }
     }
 
-    /// 发送任务开始消息
+    #[allow(dead_code)]
     pub fn send_task_started(&self, task_id: String) {
         let progress = ProgressInfo::new(task_id);
         self.send_progress_safe(progress);
     }
 
-    /// 发送任务进度更新
     pub fn send_task_progress(&self, task_id: String, percentage: f64, message: String) {
         let mut progress = ProgressInfo::new(task_id);
         progress.update_progress(percentage, message);
         self.send_progress_safe(progress);
     }
 
-    /// 发送任务完成消息
     pub fn send_task_completed(&self, task_id: String) {
         let mut progress = ProgressInfo::new(task_id);
         progress.complete();
         self.send_progress_safe(progress);
     }
 
-    /// 发送任务错误消息
     pub fn send_task_error(&self, task_id: String, error_msg: String) {
         let mut progress = ProgressInfo::new(task_id);
         progress.error(error_msg);
         self.send_progress_safe(progress);
     }
 
-    /// 获取底层发送器的克隆
+    #[allow(dead_code)]
     pub fn get_raw_sender(&self) -> mpsc::Sender<ProgressInfo> {
         self.sender.clone()
     }
 }
 
-/// 创建消息通道，返回发送器和接收器
 pub fn create_message_channel() -> (MessageSender, mpsc::Receiver<ProgressInfo>) {
     let (sender, receiver) = mpsc::channel();
     let message_sender = MessageSender::new(sender);
@@ -155,16 +138,12 @@ mod tests {
     fn test_message_sender() {
         let (sender, receiver) = create_message_channel();
 
-        // 发送任务开始消息
         sender.send_task_started("test_task".to_string());
 
-        // 发送进度更新
         sender.send_task_progress("test_task".to_string(), 50.0, "进行中".to_string());
 
-        // 发送任务完成消息
         sender.send_task_completed("test_task".to_string());
 
-        // 接收消息
         let msg1 = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
         assert_eq!(msg1.task_id, "test_task");
         assert_eq!(msg1.percentage, 0.0);
