@@ -104,7 +104,7 @@ pub extern "system" fn Java_com_example_TypeConverter_convertF32(
 ) -> jfloat {
     init_logger();
 
-    let rust_f32: f32 = 3.14159265;
+    let rust_f32: f32 = std::f32::consts::PI;
 
     info!("Converting Rust f32: {}", rust_f32);
 

@@ -1,7 +1,7 @@
 use crate::error::{PyRunnerError, Result};
 use crate::ipc::MessageSender;
 use std::sync::Arc;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 pub enum TaskExecutor {
     Thread {

@@ -24,9 +24,8 @@ impl MessageSender {
     }
 
     pub fn send_safe(&self, message: Message) {
-        let _ = self.send(message).or_else(|e| {
+        let _ = self.send(message).inspect_err(|e| {
             error!("发送消息失败: {e:?}");
-            Err(e)
         });
     }
 

@@ -1,8 +1,5 @@
 use super::message::{ErrorMessage, Message, ProgressMessage, ResultMessage};
-use indicatif::{ProgressBar, ProgressStyle};
 use ipc_channel::ipc::IpcReceiver;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 #[allow(unused_imports)]
 use tracing::{Span, debug, error, info};
@@ -12,41 +9,6 @@ pub trait MessageListener: Send + Sync {
     fn on_progress_update(&self, progress: &ProgressMessage);
     fn on_error(&self, error: &ErrorMessage);
     fn on_result(&self, result: &ResultMessage);
-}
-
-pub struct ConsoleMessageListener;
-
-impl MessageListener for ConsoleMessageListener {
-    fn on_progress_update(&self, progress: &ProgressMessage) {
-        let percentage = if progress.size > 0 {
-            (progress.done as f64 / progress.size as f64) * 100.0
-        } else {
-            0.0
-        };
-
-        let bar_length = 50;
-        let filled_length = (percentage / 100.0 * bar_length as f64) as usize;
-        let bar = "█".repeat(filled_length) + &"░".repeat(bar_length - filled_length);
-
-        info!(
-            "\r[{}] {:.1}% - 任务 {} ({}/{})",
-            bar, percentage, progress.task_id, progress.done, progress.size
-        );
-    }
-
-    fn on_error(&self, error: &ErrorMessage) {
-        error!("\n❌ 错误消息:");
-        error!("  任务ID: {}", error.task_id);
-        error!("  错误码: {}", error.error_code);
-        error!("  错误信息: {}", error.error_message);
-    }
-
-    fn on_result(&self, result: &ResultMessage) {
-        info!("\n✅ 执行结果:");
-        info!("  任务ID: {}", result.task_id);
-        info!("  页数: {}", result.pages);
-        info!("  字数: {}", result.words);
-    }
 }
 
 pub struct ConsoleProgressListener {
