@@ -3,6 +3,9 @@ use crate::message_sender::{Message, ProgressInfo, ErrorInfo, ResultInfo};
 use tracing::{debug, error, info};
 use ipc_channel::ipc::IpcReceiver;
 use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use indicatif::{ProgressBar, ProgressStyle};
 
 /// 消息监听器trait - 处理各种类型的消息
 pub trait MessageListener: Send + Sync {
@@ -102,29 +105,86 @@ impl MessageListener for ConsoleMessageListener {
 }
 
 /// 保留旧的ConsoleProgressListener以保持向后兼容
-pub struct ConsoleProgressListener;
+/// 使用 tracing-indicatif 实现的进度监听器
+pub struct ConsoleProgressListener {
+    progress_bars: Arc<Mutex<HashMap<String, ProgressBar>>>,
+}
+
+impl ConsoleProgressListener {
+    pub fn new() -> Self {
+        Self {
+            progress_bars: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn get_or_create_progress_bar(&self, task_id: &str, total: u64) -> ProgressBar {
+        let mut bars = self.progress_bars.lock().unwrap();
+        
+        if let Some(bar) = bars.get(task_id) {
+            bar.clone()
+        } else {
+            let pb = ProgressBar::new(total);
+            pb.set_style(
+                ProgressStyle::default_bar()
+                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({percent}%) {msg}")
+                    .unwrap()
+                    .progress_chars("█▓▒░ ")
+            );
+            bars.insert(task_id.to_string(), pb.clone());
+            pb
+        }
+    }
+
+    fn remove_progress_bar(&self, task_id: &str) {
+        let mut bars = self.progress_bars.lock().unwrap();
+        if let Some(pb) = bars.remove(task_id) {
+            pb.finish_and_clear();
+        }
+    }
+}
+
+impl Default for ConsoleProgressListener {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ProgressListener for ConsoleProgressListener {
     fn on_progress_update(&self, progress: &ProgressInfo) {
-        let bar_length = 50;
-        let filled_length = (progress.percentage / 100.0 * bar_length as f64) as usize;
-        let bar = "█".repeat(filled_length) + &"░".repeat(bar_length - filled_length);
-
-        println!(
-            "\r[{}] {:.1}% - {} ({}/{})",
-            bar, progress.percentage, progress.message, progress.current_step, progress.total_steps
+        let task_id_str = progress.task_id.to_string();
+        let pb = self.get_or_create_progress_bar(
+            &task_id_str,
+            progress.total_steps as u64
         );
+        
+        pb.set_position(progress.current_step as u64);
+        pb.set_message(progress.message.clone());
     }
 
     fn on_task_completed(&self, progress: &ProgressInfo) {
-        println!("\n✅ 任务完成: {} - {}", progress.task_id, progress.message);
+        let task_id_str = progress.task_id.to_string();
+        
+        if let Some(pb) = self.progress_bars.lock().unwrap().get(&task_id_str) {
+            pb.finish_with_message(format!("✅ 任务完成: {}", progress.message));
+        }
+        
+        // 稍后清除进度条以确保完成消息可见
+        self.remove_progress_bar(&task_id_str);
     }
 
     fn on_task_error(&self, progress: &ProgressInfo) {
-        println!("\n❌ 任务出错: {} - {}", progress.task_id, progress.message);
-        if let Some(error) = &progress.error_message {
-            println!("错误详情: {}", error);
+        let task_id_str = progress.task_id.to_string();
+        
+        if let Some(pb) = self.progress_bars.lock().unwrap().get(&task_id_str) {
+            let error_msg = if let Some(error) = &progress.error_message {
+                format!("❌ 任务出错: {} - 错误详情: {}", progress.message, error)
+            } else {
+                format!("❌ 任务出错: {}", progress.message)
+            };
+            pb.finish_with_message(error_msg);
         }
+        
+        self.remove_progress_bar(&task_id_str);
     }
 }
 

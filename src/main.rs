@@ -1,5 +1,5 @@
-use tracing::{error, info};
 use std::env;
+use tracing::{error, info, instrument};
 
 // 引入错误处理模块用于演示
 
@@ -16,13 +16,19 @@ use progress_monitor::{
 };
 
 fn init_logger() {
-    use tracing_subscriber::EnvFilter;
-    
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info"))
+    use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+    let indicatif_layer = tracing_indicatif::IndicatifLayer::new();
+
+    tracing_subscriber::registry()
+        .with(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
         )
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(indicatif_layer.get_stderr_writer())
+        )
+        .with(indicatif_layer)
         .init();
 }
 
@@ -76,8 +82,7 @@ fn task_fn(sender: &MessageSender, task_id: u64) -> std::result::Result<(), erro
 
     for i in 1..=100 {
         thread::sleep(Duration::from_millis(100));
-        let percentage = (i as f64 / 100.0) * 100.0;
-        sender.send_task_progress(task_id, percentage, format!("执行步骤 {}/100", i));
+        sender.send_task_progress(task_id, i as f64, format!("执行步骤 {}/100", i));
         // println!("执行步骤 {}/5", i);
     }
 
@@ -86,11 +91,12 @@ fn task_fn(sender: &MessageSender, task_id: u64) -> std::result::Result<(), erro
     Ok(())
 }
 
+#[instrument]
 fn demo_thread_task() {
     println!("🧵 开始演示子线程任务执行\n");
 
     let executor = TaskExecutor::new_thread(task_fn);
-    let listeners = vec![Box::new(ConsoleProgressListener) as Box<dyn MessageListener>];
+    let listeners = vec![Box::new(ConsoleProgressListener::new()) as Box<dyn MessageListener>];
 
     match run_task_with_monitoring(1, executor, listeners) {
         Ok(_) => println!("\n✅ 子线程任务执行演示完成"),
@@ -102,7 +108,7 @@ fn demo_process_task() {
     println!("🐍 开始演示子进程任务执行\n");
 
     let executor = TaskExecutor::new_process(task_fn);
-    let listeners = vec![Box::new(ConsoleProgressListener) as Box<dyn MessageListener>];
+    let listeners = vec![Box::new(ConsoleProgressListener::new()) as Box<dyn MessageListener>];
 
     match run_task_with_monitoring(2, executor, listeners) {
         Ok(_) => println!("\n✅ 子进程任务执行演示完成"),
@@ -114,11 +120,13 @@ fn demo_all_tasks() {
     println!("🎯 开始运行进度监控演示\n");
     println!("{}", "=".repeat(60));
 
-    demo_thread_task();
+    use std::thread;
+
+    thread::spawn(|| demo_thread_task());
 
     println!("\n{}", "=".repeat(60));
 
-    demo_process_task();
+    thread::spawn(|| demo_process_task());
 
     println!("\n{}", "=".repeat(60));
 

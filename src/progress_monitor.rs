@@ -74,7 +74,7 @@ mod tests {
         };
 
         let executor = crate::task_executor::TaskExecutor::new_thread(task_fn);
-        let listeners = vec![Box::new(ConsoleProgressListener) as Box<dyn MessageListener>];
+        let listeners = vec![Box::new(ConsoleProgressListener::new()) as Box<dyn MessageListener>];
 
         let result = run_task_with_monitoring(1, executor, listeners);
 
