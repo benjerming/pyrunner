@@ -1,5 +1,5 @@
 use crate::error::{PyRunnerError, Result};
-use crate::message_sender::MessageSender;
+use crate::ipc::MessageSender;
 use tracing::{error, info, warn};
 use std::sync::Arc;
 
@@ -217,7 +217,7 @@ impl TaskExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_sender::create_message_channel;
+    use crate::ipc::create_message_channel;
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
@@ -232,12 +232,7 @@ mod tests {
 
             for i in 1..=5 {
                 thread::sleep(Duration::from_millis(200));
-                let percentage = (i as f64 / 5.0) * 100.0;
-                sender.send_task_progress(
-                    task_id,
-                    percentage,
-                    format!("执行步骤 {}/5", i),
-                );
+                sender.send_task_progress(task_id, i, 5);
                 println!("执行步骤 {}/5", i);
             }
 

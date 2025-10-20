@@ -1,4 +1,3 @@
-use crate::message_sender::{Message, ProgressInfo, ErrorInfo, ResultInfo};
 #[allow(unused_imports)]
 use tracing::{debug, error, info};
 use ipc_channel::ipc::IpcReceiver;
@@ -6,17 +5,12 @@ use std::time::Duration;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use indicatif::{ProgressBar, ProgressStyle};
+use super::message::{Message, ProgressInfo, ErrorInfo, ResultInfo};
 
 /// 消息监听器trait - 处理各种类型的消息
 pub trait MessageListener: Send + Sync {
     /// 进度更新回调
     fn on_progress_update(&self, progress: &ProgressInfo);
-
-    /// 任务完成回调
-    fn on_task_completed(&self, progress: &ProgressInfo);
-
-    /// 任务出错回调（通过ProgressInfo）
-    fn on_task_error(&self, progress: &ProgressInfo);
 
     /// 错误消息回调
     fn on_error(&self, error: &ErrorInfo);
@@ -25,65 +19,25 @@ pub trait MessageListener: Send + Sync {
     fn on_result(&self, result: &ResultInfo);
 }
 
-/// 保留旧的ProgressListener trait以保持向后兼容
-pub trait ProgressListener: Send + Sync {
-    fn on_progress_update(&self, progress: &ProgressInfo);
-
-    fn on_task_completed(&self, progress: &ProgressInfo);
-
-    fn on_task_error(&self, progress: &ProgressInfo);
-}
-
-/// 为实现了ProgressListener的类型自动实现MessageListener
-impl<T: ProgressListener> MessageListener for T {
-    fn on_progress_update(&self, progress: &ProgressInfo) {
-        ProgressListener::on_progress_update(self, progress);
-    }
-
-    fn on_task_completed(&self, progress: &ProgressInfo) {
-        ProgressListener::on_task_completed(self, progress);
-    }
-
-    fn on_task_error(&self, progress: &ProgressInfo) {
-        ProgressListener::on_task_error(self, progress);
-    }
-
-    fn on_error(&self, error: &ErrorInfo) {
-        // 默认实现：将ErrorInfo转换为ProgressInfo并调用on_task_error
-        let mut progress = ProgressInfo::new(error.task_id.clone());
-        progress.error(error.error_message.clone());
-        self.on_task_error(&progress);
-    }
-
-    fn on_result(&self, _result: &ResultInfo) {
-        // 默认实现：不处理结果消息
-    }
-}
-
 /// 控制台消息监听器 - 完整实现MessageListener
 pub struct ConsoleMessageListener;
 
 impl MessageListener for ConsoleMessageListener {
     fn on_progress_update(&self, progress: &ProgressInfo) {
+        let percentage = if progress.size > 0 {
+            (progress.done as f64 / progress.size as f64) * 100.0
+        } else {
+            0.0
+        };
+
         let bar_length = 50;
-        let filled_length = (progress.percentage / 100.0 * bar_length as f64) as usize;
+        let filled_length = (percentage / 100.0 * bar_length as f64) as usize;
         let bar = "█".repeat(filled_length) + &"░".repeat(bar_length - filled_length);
 
         println!(
-            "\r[{}] {:.1}% - {} ({}/{})",
-            bar, progress.percentage, progress.message, progress.current_step, progress.total_steps
+            "\r[{}] {:.1}% - 任务 {} ({}/{})",
+            bar, percentage, progress.task_id, progress.done, progress.size
         );
-    }
-
-    fn on_task_completed(&self, progress: &ProgressInfo) {
-        println!("\n✅ 任务完成: {} - {}", progress.task_id, progress.message);
-    }
-
-    fn on_task_error(&self, progress: &ProgressInfo) {
-        println!("\n❌ 任务出错: {} - {}", progress.task_id, progress.message);
-        if let Some(error) = &progress.error_message {
-            println!("错误详情: {}", error);
-        }
     }
 
     fn on_error(&self, error: &ErrorInfo) {
@@ -91,21 +45,17 @@ impl MessageListener for ConsoleMessageListener {
         println!("  任务ID: {}", error.task_id);
         println!("  错误码: {}", error.error_code);
         println!("  错误信息: {}", error.error_message);
-        println!("  可重试: {}", if error.is_retryable { "是" } else { "否" });
-        println!("  致命错误: {}", if error.is_fatal { "是" } else { "否" });
     }
 
     fn on_result(&self, result: &ResultInfo) {
-        let status = if result.success { "✅ 成功" } else { "❌ 失败" };
-        println!("\n{} 执行结果:", status);
+        println!("\n✅ 执行结果:");
         println!("  任务ID: {}", result.task_id);
-        println!("  结果类型: {}", result.result_type);
-        println!("  结果数据: {}", result.result_data);
+        println!("  页数: {}", result.pages);
+        println!("  字数: {}", result.words);
     }
 }
 
-/// 保留旧的ConsoleProgressListener以保持向后兼容
-/// 使用 tracing-indicatif 实现的进度监听器
+/// 使用 indicatif 实现的进度监听器
 pub struct ConsoleProgressListener {
     progress_bars: Arc<Mutex<HashMap<String, ProgressBar>>>,
 }
@@ -149,39 +99,33 @@ impl Default for ConsoleProgressListener {
     }
 }
 
-impl ProgressListener for ConsoleProgressListener {
+impl MessageListener for ConsoleProgressListener {
     fn on_progress_update(&self, progress: &ProgressInfo) {
         let task_id_str = progress.task_id.to_string();
         let pb = self.get_or_create_progress_bar(
             &task_id_str,
-            progress.total_steps as u64
+            progress.size
         );
         
-        pb.set_position(progress.current_step as u64);
-        pb.set_message(progress.message.clone());
+        pb.set_position(progress.done);
+        pb.set_message(format!("任务 {}", progress.task_id));
     }
 
-    fn on_task_completed(&self, progress: &ProgressInfo) {
-        let task_id_str = progress.task_id.to_string();
+    fn on_error(&self, error: &ErrorInfo) {
+        let task_id_str = error.task_id.to_string();
         
         if let Some(pb) = self.progress_bars.lock().unwrap().get(&task_id_str) {
-            pb.finish_with_message(format!("✅ 任务完成: {}", progress.message));
+            pb.finish_with_message(format!("❌ 任务出错: {}", error.error_message));
         }
         
-        // 稍后清除进度条以确保完成消息可见
         self.remove_progress_bar(&task_id_str);
     }
 
-    fn on_task_error(&self, progress: &ProgressInfo) {
-        let task_id_str = progress.task_id.to_string();
+    fn on_result(&self, result: &ResultInfo) {
+        let task_id_str = result.task_id.to_string();
         
         if let Some(pb) = self.progress_bars.lock().unwrap().get(&task_id_str) {
-            let error_msg = if let Some(error) = &progress.error_message {
-                format!("❌ 任务出错: {} - 错误详情: {}", progress.message, error)
-            } else {
-                format!("❌ 任务出错: {}", progress.message)
-            };
-            pb.finish_with_message(error_msg);
+            pb.finish_with_message(format!("✅ 任务完成: {} 页，{} 字", result.pages, result.words));
         }
         
         self.remove_progress_bar(&task_id_str);
@@ -218,18 +162,7 @@ impl MessageReceiver {
                     match &message {
                         Message::Progress(progress) => {
                             for listener in &self.listeners {
-                                if progress.has_error {
-                                    listener.on_task_error(progress);
-                                } else if progress.is_completed {
-                                    listener.on_task_completed(progress);
-                                } else {
-                                    listener.on_progress_update(progress);
-                                }
-                            }
-
-                            // 如果任务完成或出错，停止监听
-                            if progress.is_completed || progress.has_error {
-                                break;
+                                listener.on_progress_update(progress);
                             }
                         }
                         Message::Error(error) => {
@@ -266,7 +199,7 @@ impl MessageReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::message_sender::create_message_channel;
+    use crate::ipc::create_message_channel;
     use std::sync::{Arc, Mutex};
     use std::thread;
 
@@ -284,20 +217,20 @@ mod tests {
         }
     }
 
-    impl ProgressListener for TestProgressListener {
+    impl MessageListener for TestProgressListener {
         fn on_progress_update(&self, progress: &ProgressInfo) {
             let mut messages = self.messages.lock().unwrap();
-            messages.push(format!("progress: {}%", progress.percentage));
+            messages.push(format!("progress: {}/{}", progress.done, progress.size));
         }
 
-        fn on_task_completed(&self, progress: &ProgressInfo) {
+        fn on_error(&self, error: &ErrorInfo) {
             let mut messages = self.messages.lock().unwrap();
-            messages.push(format!("completed: {}", progress.task_id));
+            messages.push(format!("error: {}", error.task_id));
         }
 
-        fn on_task_error(&self, progress: &ProgressInfo) {
+        fn on_result(&self, result: &ResultInfo) {
             let mut messages = self.messages.lock().unwrap();
-            messages.push(format!("error: {}", progress.task_id));
+            messages.push(format!("result: {}", result.task_id));
         }
     }
 
@@ -313,7 +246,7 @@ mod tests {
         thread::spawn(move || {
             sender_clone.send_task_started(1);
             thread::sleep(Duration::from_millis(10));
-            sender_clone.send_task_progress(1, 50.0, "进行中".to_string());
+            sender_clone.send_task_progress(1, 50, 100);
             thread::sleep(Duration::from_millis(10));
             sender_clone.send_task_completed(1);
         });
@@ -322,8 +255,9 @@ mod tests {
 
         let messages = messages.lock().unwrap();
         assert_eq!(messages.len(), 3);
-        assert!(messages[0].contains("progress: 0"));
-        assert!(messages[1].contains("progress: 50"));
-        assert!(messages[2].contains("completed: 1"));
+        assert!(messages[0].contains("progress: 0/0"));
+        assert!(messages[1].contains("progress: 50/100"));
+        assert!(messages[2].contains("result: 1"));
     }
 }
+

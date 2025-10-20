@@ -1,11 +1,10 @@
 use crate::error::Result;
-use crate::message_receiver::MessageReceiver;
-use crate::message_sender::{MessageSender, create_message_channel};
+use crate::ipc::{MessageReceiver, MessageSender, create_message_channel};
 use tracing::error;
 use std::thread;
 
 // 导出消息相关类型
-pub use crate::message_receiver::{ConsoleProgressListener, MessageListener};
+pub use crate::ipc::{ConsoleProgressListener, MessageListener};
 pub use crate::task_executor::TaskExecutor;
 
 pub struct ProgressMonitor {
@@ -68,7 +67,7 @@ mod tests {
 
     #[test]
     fn test_run_task_with_monitoring() {
-        let task_fn = |_sender: &crate::message_sender::MessageSender, _task_id: u64| -> Result<()> {
+        let task_fn = |_sender: &crate::ipc::MessageSender, _task_id: u64| -> Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(10));
             Ok(())
         };
