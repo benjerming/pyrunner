@@ -1,7 +1,22 @@
 use log::{debug, error};
 use serde::{Deserialize, Serialize};
 use std::sync::mpsc;
+use std::time::SystemTime;
+use crate::error::PyRunnerError;
 
+/// 统一的消息枚举，支持多种消息类型
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", content = "data")]
+pub enum Message {
+    /// 进度消息
+    Progress(ProgressInfo),
+    /// 错误消息
+    Error(ErrorInfo),
+    /// 结果消息
+    Result(ResultInfo),
+}
+
+/// 进度信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProgressInfo {
     pub task_id: String,
@@ -12,6 +27,31 @@ pub struct ProgressInfo {
     pub is_completed: bool,
     pub has_error: bool,
     pub error_message: Option<String>,
+    #[serde(skip)]
+    pub timestamp: Option<SystemTime>,
+}
+
+/// 错误信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorInfo {
+    pub task_id: String,
+    pub error_code: i32,
+    pub error_message: String,
+    pub is_retryable: bool,
+    pub is_fatal: bool,
+    #[serde(skip)]
+    pub timestamp: Option<SystemTime>,
+}
+
+/// 执行结果信息
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultInfo {
+    pub task_id: String,
+    pub result_type: String,
+    pub result_data: serde_json::Value,
+    pub success: bool,
+    #[serde(skip)]
+    pub timestamp: Option<SystemTime>,
 }
 
 impl ProgressInfo {
@@ -25,6 +65,7 @@ impl ProgressInfo {
             is_completed: false,
             has_error: false,
             error_message: None,
+            timestamp: Some(SystemTime::now()),
         }
     }
 
@@ -45,31 +86,107 @@ impl ProgressInfo {
         self.has_error = true;
         self.error_message = Some(error_msg.clone());
         self.message = format!("任务出错: {}", error_msg);
+        self.timestamp = Some(SystemTime::now());
+    }
+}
+
+impl ErrorInfo {
+    pub fn new(task_id: String, error: &PyRunnerError) -> Self {
+        Self {
+            task_id,
+            error_code: error.error_code(),
+            error_message: error.to_string(),
+            is_retryable: error.is_retryable(),
+            is_fatal: error.is_fatal(),
+            timestamp: Some(SystemTime::now()),
+        }
+    }
+
+    pub fn from_string(task_id: String, error_message: String) -> Self {
+        Self {
+            task_id,
+            error_code: 9999,
+            error_message,
+            is_retryable: false,
+            is_fatal: false,
+            timestamp: Some(SystemTime::now()),
+        }
+    }
+}
+
+impl ResultInfo {
+    pub fn new(task_id: String, result_type: String, result_data: serde_json::Value) -> Self {
+        Self {
+            task_id,
+            result_type,
+            result_data,
+            success: true,
+            timestamp: Some(SystemTime::now()),
+        }
+    }
+
+    pub fn success(task_id: String, result_data: serde_json::Value) -> Self {
+        Self::new(task_id, "success".to_string(), result_data)
+    }
+
+    pub fn failure(task_id: String, result_data: serde_json::Value) -> Self {
+        let mut result = Self::new(task_id, "failure".to_string(), result_data);
+        result.success = false;
+        result
     }
 }
 
 #[derive(Clone)]
 pub struct MessageSender {
-    sender: mpsc::Sender<ProgressInfo>,
+    sender: mpsc::Sender<Message>,
 }
 
 impl MessageSender {
-    pub fn new(sender: mpsc::Sender<ProgressInfo>) -> Self {
+    pub fn new(sender: mpsc::Sender<Message>) -> Self {
         Self { sender }
     }
 
-    pub fn send_progress(
-        &self,
-        progress: ProgressInfo,
-    ) -> Result<(), mpsc::SendError<ProgressInfo>> {
-        debug!("发送进度更新: {:?}", progress);
-        self.sender.send(progress)
+    /// 发送消息
+    pub fn send(&self, message: Message) -> Result<(), mpsc::SendError<Message>> {
+        debug!("发送消息: {:?}", message);
+        self.sender.send(message)
     }
 
-    pub fn send_progress_safe(&self, progress: ProgressInfo) {
-        if let Err(e) = self.send_progress(progress) {
-            error!("发送进度更新失败: {}", e);
+    /// 安全发送消息（失败时记录错误）
+    pub fn send_safe(&self, message: Message) {
+        if let Err(e) = self.send(message) {
+            error!("发送消息失败: {}", e);
         }
+    }
+
+    /// 发送进度消息
+    pub fn send_progress(&self, progress: ProgressInfo) -> Result<(), mpsc::SendError<Message>> {
+        self.send(Message::Progress(progress))
+    }
+
+    /// 安全发送进度消息
+    pub fn send_progress_safe(&self, progress: ProgressInfo) {
+        self.send_safe(Message::Progress(progress));
+    }
+
+    /// 发送错误消息
+    pub fn send_error(&self, error_info: ErrorInfo) -> Result<(), mpsc::SendError<Message>> {
+        self.send(Message::Error(error_info))
+    }
+
+    /// 安全发送错误消息
+    pub fn send_error_safe(&self, error_info: ErrorInfo) {
+        self.send_safe(Message::Error(error_info));
+    }
+
+    /// 发送结果消息
+    pub fn send_result(&self, result_info: ResultInfo) -> Result<(), mpsc::SendError<Message>> {
+        self.send(Message::Result(result_info))
+    }
+
+    /// 安全发送结果消息
+    pub fn send_result_safe(&self, result_info: ResultInfo) {
+        self.send_safe(Message::Result(result_info));
     }
 
     #[allow(dead_code)]
@@ -96,13 +213,20 @@ impl MessageSender {
         self.send_progress_safe(progress);
     }
 
+    /// 从PyRunnerError发送错误消息
+    pub fn send_task_error_from_pyrunner_error(&self, task_id: String, error: &PyRunnerError) {
+        let error_info = ErrorInfo::new(task_id, error);
+        self.send_error_safe(error_info);
+    }
+
     #[allow(dead_code)]
-    pub fn get_raw_sender(&self) -> mpsc::Sender<ProgressInfo> {
+    pub fn get_raw_sender(&self) -> mpsc::Sender<Message> {
         self.sender.clone()
     }
 }
 
-pub fn create_message_channel() -> (MessageSender, mpsc::Receiver<ProgressInfo>) {
+/// 创建消息通道
+pub fn create_message_channel() -> (MessageSender, mpsc::Receiver<Message>) {
     let (sender, receiver) = mpsc::channel();
     let message_sender = MessageSender::new(sender);
     (message_sender, receiver)
@@ -144,17 +268,32 @@ mod tests {
 
         sender.send_task_completed("test_task".to_string());
 
+        // 接收第一条消息 - 任务启动
         let msg1 = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
-        assert_eq!(msg1.task_id, "test_task");
-        assert_eq!(msg1.percentage, 0.0);
+        if let Message::Progress(progress) = msg1 {
+            assert_eq!(progress.task_id, "test_task");
+            assert_eq!(progress.percentage, 0.0);
+        } else {
+            panic!("期望收到 Progress 消息");
+        }
 
+        // 接收第二条消息 - 进度更新
         let msg2 = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
-        assert_eq!(msg2.percentage, 50.0);
-        assert_eq!(msg2.message, "进行中");
+        if let Message::Progress(progress) = msg2 {
+            assert_eq!(progress.percentage, 50.0);
+            assert_eq!(progress.message, "进行中");
+        } else {
+            panic!("期望收到 Progress 消息");
+        }
 
+        // 接收第三条消息 - 任务完成
         let msg3 = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
-        assert_eq!(msg3.percentage, 100.0);
-        assert!(msg3.is_completed);
+        if let Message::Progress(progress) = msg3 {
+            assert_eq!(progress.percentage, 100.0);
+            assert!(progress.is_completed);
+        } else {
+            panic!("期望收到 Progress 消息");
+        }
     }
 
     #[test]
@@ -164,8 +303,47 @@ mod tests {
         sender.send_task_error("error_task".to_string(), "模拟错误".to_string());
 
         let msg = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
-        assert!(msg.has_error);
-        assert_eq!(msg.error_message, Some("模拟错误".to_string()));
-        assert!(msg.message.contains("模拟错误"));
+        if let Message::Progress(progress) = msg {
+            assert!(progress.has_error);
+            assert_eq!(progress.error_message, Some("模拟错误".to_string()));
+            assert!(progress.message.contains("模拟错误"));
+        } else {
+            panic!("期望收到 Progress 消息");
+        }
+    }
+
+    #[test]
+    fn test_error_message() {
+        let (sender, receiver) = create_message_channel();
+
+        let error = PyRunnerError::task_execution_failed("测试错误");
+        sender.send_task_error_from_pyrunner_error("test_task".to_string(), &error);
+
+        let msg = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
+        if let Message::Error(error_info) = msg {
+            assert_eq!(error_info.task_id, "test_task");
+            assert_eq!(error_info.error_code, 1001);
+            assert!(error_info.error_message.contains("测试错误"));
+        } else {
+            panic!("期望收到 Error 消息");
+        }
+    }
+
+    #[test]
+    fn test_result_message() {
+        let (sender, receiver) = create_message_channel();
+
+        let result_data = serde_json::json!({"status": "success", "data": 42});
+        let result_info = ResultInfo::success("test_task".to_string(), result_data);
+        sender.send_result_safe(result_info);
+
+        let msg = receiver.recv_timeout(Duration::from_millis(100)).unwrap();
+        if let Message::Result(result) = msg {
+            assert_eq!(result.task_id, "test_task");
+            assert!(result.success);
+            assert_eq!(result.result_data["data"], 42);
+        } else {
+            panic!("期望收到 Result 消息");
+        }
     }
 }

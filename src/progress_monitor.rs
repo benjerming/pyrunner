@@ -5,7 +5,11 @@ use crate::task_executor::TaskExecutor;
 use log::error;
 use std::thread;
 
-pub use crate::message_receiver::{ConsoleProgressListener, ProgressListener};
+// 导出消息相关类型
+pub use crate::message_sender::{ErrorInfo, Message, ProgressInfo, ResultInfo};
+pub use crate::message_receiver::{
+    ConsoleMessageListener, ConsoleProgressListener, MessageListener, ProgressListener,
+};
 pub use crate::task_executor::{ProcessTaskExecutor, ThreadTaskExecutor};
 
 pub struct ProgressMonitor {
@@ -24,7 +28,7 @@ impl ProgressMonitor {
         }
     }
 
-    pub fn add_listener(&mut self, listener: Box<dyn ProgressListener>) {
+    pub fn add_listener(&mut self, listener: Box<dyn MessageListener>) {
         self.message_receiver.add_listener(listener);
     }
 
@@ -40,7 +44,7 @@ impl ProgressMonitor {
 pub fn run_task_with_monitoring<T: TaskExecutor>(
     task_id: String,
     executor: T,
-    listeners: Vec<Box<dyn ProgressListener>>,
+    listeners: Vec<Box<dyn MessageListener>>,
 ) -> Result<()> {
     let (sender, receiver) = create_message_channel();
     let mut message_receiver = MessageReceiver::new(receiver);
@@ -68,13 +72,13 @@ mod tests {
 
     #[test]
     fn test_run_task_with_monitoring() {
-        let task_fn = || -> Result<()> {
+        let task_fn = |_sender: &crate::message_sender::MessageSender| -> Result<()> {
             std::thread::sleep(std::time::Duration::from_millis(10));
             Ok(())
         };
 
         let executor = ThreadTaskExecutor::new(task_fn);
-        let listeners = vec![Box::new(ConsoleProgressListener) as Box<dyn ProgressListener>];
+        let listeners = vec![Box::new(ConsoleProgressListener) as Box<dyn MessageListener>];
 
         let result = run_task_with_monitoring("test_task".to_string(), executor, listeners);
 

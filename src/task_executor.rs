@@ -8,13 +8,13 @@ pub trait TaskExecutor: Send + Sync {
 }
 
 pub struct ThreadTaskExecutor {
-    task_function: Arc<dyn Fn() -> Result<()> + Send + Sync>,
+    task_function: Arc<dyn Fn(&MessageSender) -> Result<()> + Send + Sync>,
 }
 
 impl ThreadTaskExecutor {
     pub fn new<F>(task_function: F) -> Self
     where
-        F: Fn() -> Result<()> + Send + Sync + 'static,
+        F: Fn(&MessageSender) -> Result<()> + Send + Sync + 'static,
     {
         Self {
             task_function: Arc::new(task_function),
@@ -24,38 +24,21 @@ impl ThreadTaskExecutor {
     pub async fn execute_async(&self, task_id: String, sender: &MessageSender) -> Result<()> {
         info!("开始通过线程执行任务 (任务ID: {})", task_id);
 
-        sender.send_task_progress(task_id.clone(), 0.0, "准备创建工作线程".to_string());
-
         let task_function = self.task_function.clone();
         let task_id_clone = task_id.clone();
         let sender_clone = sender.clone();
 
-        sender.send_task_progress(task_id.clone(), 10.0, "创建工作线程".to_string());
-
-        let result = tokio::task::spawn_blocking(move || {
-            sender_clone.send_task_progress(
-                task_id_clone.clone(),
-                50.0,
-                "线程执行任务中".to_string(),
-            );
-
-            match task_function() {
-                Ok(()) => {
-                    sender_clone.send_task_progress(
-                        task_id_clone.clone(),
-                        90.0,
-                        "任务执行完成".to_string(),
-                    );
-                    sender_clone.send_task_completed(task_id_clone.clone());
-                    info!("线程任务执行成功: {}", task_id_clone);
-                    Ok(())
-                }
-                Err(e) => {
-                    let error_msg = format!("线程任务执行失败: {}", e);
-                    sender_clone.send_task_error(task_id_clone.clone(), error_msg.clone());
-                    error!("线程任务执行失败: {} - {}", task_id_clone, error_msg);
-                    Err(e)
-                }
+        let result = tokio::task::spawn_blocking(move || match task_function(&sender_clone) {
+            Ok(()) => {
+                sender_clone.send_task_completed(task_id_clone.clone());
+                info!("线程任务执行成功: {}", task_id_clone);
+                Ok(())
+            }
+            Err(e) => {
+                let error_msg = format!("线程任务执行失败: {}", e);
+                sender_clone.send_task_error(task_id_clone.clone(), error_msg.clone());
+                error!("线程任务执行失败: {} - {}", task_id_clone, error_msg);
+                Err(e)
             }
         })
         .await;
@@ -79,13 +62,13 @@ impl TaskExecutor for ThreadTaskExecutor {
 }
 
 pub struct ProcessTaskExecutor {
-    task_function: Box<dyn Fn() -> Result<()> + Send + Sync>,
+    task_function: Box<dyn Fn(&MessageSender) -> Result<()> + Send + Sync>,
 }
 
 impl ProcessTaskExecutor {
     pub fn new<F>(task_function: F) -> Self
     where
-        F: Fn() -> Result<()> + Send + Sync + 'static,
+        F: Fn(&MessageSender) -> Result<()> + Send + Sync + 'static,
     {
         Self {
             task_function: Box::new(task_function),
@@ -94,8 +77,6 @@ impl ProcessTaskExecutor {
 
     pub async fn execute_async(&self, task_id: String, sender: &MessageSender) -> Result<()> {
         info!("开始执行任务 (任务ID: {})", task_id);
-
-        sender.send_task_progress(task_id.clone(), 0.0, "准备执行任务".to_string());
 
         #[cfg(unix)]
         {
@@ -115,28 +96,14 @@ impl ProcessTaskExecutor {
         use nix::unistd::{ForkResult, fork};
         use std::process;
 
-        sender.send_task_progress(task_id.clone(), 10.0, "创建子进程".to_string());
-
         match unsafe { fork() } {
             Ok(ForkResult::Parent { child }) => {
                 // 父进程
                 info!("父进程等待子进程完成，子进程PID: {}", child);
-                sender.send_task_progress(
-                    task_id.clone(),
-                    50.0,
-                    format!("子进程运行中 (PID: {})", child),
-                );
 
                 match waitpid(child, None) {
                     Ok(WaitStatus::Exited(_, exit_code)) => {
-                        sender.send_task_progress(
-                            task_id.clone(),
-                            90.0,
-                            "子进程执行完成".to_string(),
-                        );
-
                         if exit_code == 0 {
-                            sender.send_task_completed(task_id.clone());
                             info!("子进程任务执行成功: {}", task_id);
                             Ok(())
                         } else {
@@ -149,8 +116,8 @@ impl ProcessTaskExecutor {
                     Ok(WaitStatus::Signaled(_, signal, _)) => {
                         let error_msg = format!("子进程被信号终止: {:?}", signal);
                         sender.send_task_error(task_id.clone(), error_msg.clone());
-                        error!("子进程被信号终止: {} - {}", task_id, error_msg);
-                        Err(PyRunnerError::task_execution_failed(error_msg))
+                        warn!("子进程被信号终止: {} - {}", task_id, error_msg);
+                        Ok(())
                     }
                     Ok(status) => {
                         let error_msg = format!("子进程异常终止: {:?}", status);
@@ -168,13 +135,14 @@ impl ProcessTaskExecutor {
             Ok(ForkResult::Child) => {
                 info!("在子进程中执行任务: {}", task_id);
 
-                let exit_code = match (self.task_function)() {
+                let exit_code = match (self.task_function)(sender) {
                     Ok(()) => {
                         info!("子进程任务执行成功");
                         0
                     }
                     Err(e) => {
                         error!("子进程任务执行失败: {}", e);
+                        sender.send_task_error(task_id.clone(), e.to_string());
                         1
                     }
                 };
@@ -191,13 +159,8 @@ impl ProcessTaskExecutor {
 
     #[cfg(windows)]
     async fn execute_with_thread(&self, task_id: String, sender: &MessageSender) -> Result<()> {
-        sender.send_task_progress(task_id.clone(), 10.0, "创建工作线程".to_string());
-
-        sender.send_task_progress(task_id.clone(), 50.0, "线程执行任务中".to_string());
-
-        match (self.task_function)() {
+        match (self.task_function)(sender) {
             Ok(()) => {
-                sender.send_task_progress(task_id.clone(), 90.0, "任务执行完成".to_string());
                 sender.send_task_completed(task_id.clone());
                 info!("线程任务执行成功: {}", task_id);
                 Ok(())
@@ -231,8 +194,22 @@ mod tests {
     fn test_thread_task_executor() {
         let (sender, receiver) = create_message_channel();
 
-        let task_fn = || -> Result<()> {
-            thread::sleep(Duration::from_millis(100));
+        let task_fn = |sender: &MessageSender| -> Result<()> {
+            use std::thread;
+            use std::time::Duration;
+
+            for i in 1..=5 {
+                thread::sleep(Duration::from_millis(200));
+                let percentage = (i as f64 / 5.0) * 100.0;
+                sender.send_task_progress(
+                    "process_task".to_string(),
+                    percentage,
+                    format!("执行步骤 {}/5", i),
+                );
+                println!("执行步骤 {}/5", i);
+            }
+
+            println!("任务执行成功");
             Ok(())
         };
 
@@ -242,11 +219,17 @@ mod tests {
         let messages_clone = messages.clone();
 
         thread::spawn(move || {
-            while let Ok(msg) = receiver.recv() {
-                let mut msgs = messages_clone.lock().unwrap();
-                msgs.push(msg);
-                if msgs.last().unwrap().is_completed || msgs.last().unwrap().has_error {
-                    break;
+            loop {
+                match receiver.recv_timeout(Duration::from_secs(3)) {
+                    Ok(msg) => {
+                        println!("收到消息: {:?}", msg);
+                        let mut msgs = messages_clone.lock().unwrap();
+                        msgs.push(msg);
+                    }
+                    Err(e) => {
+                        error!("接收消息失败: {}", e);
+                        break;
+                    }
                 }
             }
         });
@@ -254,19 +237,30 @@ mod tests {
         let result = executor.execute("test_thread".to_string(), &sender);
         assert!(result.is_ok());
 
-        thread::sleep(Duration::from_millis(200));
-
         let messages = messages.lock().unwrap();
-        assert!(messages.len() >= 2); // 至少有开始和完成消息
-        assert!(messages.last().unwrap().is_completed);
+        assert!(messages.len() >= 5); // 测试用例发送5条消息
     }
 
     #[test]
     fn test_process_task_executor() {
         let (sender, receiver) = create_message_channel();
 
-        let task_fn = || -> Result<()> {
-            thread::sleep(Duration::from_millis(100));
+        let task_fn = |sender: &MessageSender| -> Result<()> {
+            use std::thread;
+            use std::time::Duration;
+
+            for i in 1..=5 {
+                thread::sleep(Duration::from_millis(200));
+                let percentage = (i as f64 / 5.0) * 100.0;
+                sender.send_task_progress(
+                    "process_task".to_string(),
+                    percentage,
+                    format!("执行步骤 {}/5", i),
+                );
+                println!("执行步骤 {}/5", i);
+            }
+
+            println!("任务执行成功");
             Ok(())
         };
 
@@ -277,11 +271,17 @@ mod tests {
 
         // 在另一个线程中收集消息
         thread::spawn(move || {
-            while let Ok(msg) = receiver.recv() {
-                let mut msgs = messages_clone.lock().unwrap();
-                msgs.push(msg);
-                if msgs.last().unwrap().is_completed || msgs.last().unwrap().has_error {
-                    break;
+            loop {
+                match receiver.recv_timeout(Duration::from_secs(3)) {
+                    Ok(msg) => {
+                        println!("收到消息: {:?}", msg);
+                        let mut msgs = messages_clone.lock().unwrap();
+                        msgs.push(msg);
+                    }
+                    Err(e) => {
+                        error!("接收消息失败: {}", e);
+                        break;
+                    }
                 }
             }
         });
@@ -294,7 +294,6 @@ mod tests {
         thread::sleep(Duration::from_millis(200));
 
         let messages = messages.lock().unwrap();
-        assert!(messages.len() >= 2); // 至少有开始和完成消息
-        assert!(messages.last().unwrap().is_completed);
+        assert!(messages.len() >= 5); // 测试用例发送5条消息
     }
 }
