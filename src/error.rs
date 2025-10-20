@@ -9,10 +9,10 @@ pub enum PyRunnerError {
     TaskExecutionFailed { message: String },
 
     #[error("任务超时: {task_id}")]
-    TaskTimeout { task_id: String },
+    TaskTimeout { task_id: u64 },
 
     #[error("任务被取消: {task_id}")]
-    TaskCancelled { task_id: String },
+    TaskCancelled { task_id: u64 },
 
     #[error(transparent)]
     JoinError(#[from] tokio::task::JoinError),
@@ -110,9 +110,9 @@ impl PyRunnerError {
     }
 
     /// 创建任务超时错误
-    pub fn task_timeout<S: Into<String>>(task_id: S) -> Self {
+    pub fn task_timeout(task_id: u64) -> Self {
         Self::TaskTimeout {
-            task_id: task_id.into(),
+            task_id,
         }
     }
 

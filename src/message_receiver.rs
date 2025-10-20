@@ -1,7 +1,7 @@
 use crate::message_sender::{Message, ProgressInfo, ErrorInfo, ResultInfo};
 #[allow(unused_imports)]
-use log::{debug, error, info};
-use std::sync::mpsc;
+use tracing::{debug, error, info};
+use ipc_channel::ipc::IpcReceiver;
 use std::time::Duration;
 
 /// 消息监听器trait - 处理各种类型的消息
@@ -129,13 +129,13 @@ impl ProgressListener for ConsoleProgressListener {
 }
 
 pub struct MessageReceiver {
-    receiver: mpsc::Receiver<Message>,
+    receiver: IpcReceiver<Message>,
     listeners: Vec<Box<dyn MessageListener>>,
     timeout: Duration,
 }
 
 impl MessageReceiver {
-    pub fn new(receiver: mpsc::Receiver<Message>) -> Self {
+    pub fn new(receiver: IpcReceiver<Message>) -> Self {
         Self {
             receiver,
             listeners: Vec::new(),
@@ -151,9 +151,9 @@ impl MessageReceiver {
         info!("开始监听消息...");
 
         loop {
-            match self.receiver.recv_timeout(self.timeout) {
+            match self.receiver.try_recv_timeout(self.timeout) {
                 Ok(message) => {
-                    debug!("收到消息: {:?}", message);
+                    info!("收到消息: {:?}", message);
 
                     match &message {
                         Message::Progress(progress) => {
@@ -188,10 +188,11 @@ impl MessageReceiver {
                         }
                     }
                 }
-                Err(mpsc::RecvTimeoutError::Timeout) => {
+                Err(ipc_channel::ipc::TryRecvError::Empty) => {
+                    // 超时，继续等待
                     continue;
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(ipc_channel::ipc::TryRecvError::IpcError(_)) => {
                     info!("发送器已断开连接，停止监听");
                     break;
                 }
@@ -250,11 +251,11 @@ mod tests {
 
         let sender_clone = sender.clone();
         thread::spawn(move || {
-            sender_clone.send_task_started("test_task".to_string());
+            sender_clone.send_task_started(1);
             thread::sleep(Duration::from_millis(10));
-            sender_clone.send_task_progress("test_task".to_string(), 50.0, "进行中".to_string());
+            sender_clone.send_task_progress(1, 50.0, "进行中".to_string());
             thread::sleep(Duration::from_millis(10));
-            sender_clone.send_task_completed("test_task".to_string());
+            sender_clone.send_task_completed(1);
         });
 
         message_receiver.start_listening();
@@ -263,6 +264,6 @@ mod tests {
         assert_eq!(messages.len(), 3);
         assert!(messages[0].contains("progress: 0"));
         assert!(messages[1].contains("progress: 50"));
-        assert!(messages[2].contains("completed: test_task"));
+        assert!(messages[2].contains("completed: 1"));
     }
 }

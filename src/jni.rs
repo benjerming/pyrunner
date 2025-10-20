@@ -4,17 +4,33 @@ use jni::objects::JClass;
 #[allow(unused_imports)]
 use jni::sys::{jboolean, jfloat, jint, jstring};
 #[allow(unused_imports)]
-use log::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace, warn};
 
 const TAG: &str = "libpr";
 
 // 初始化日志记录器的辅助函数
 fn init_logger() {
-    android_logger::init_once(
-        android_logger::Config::default()
-            .with_max_level(log::LevelFilter::Trace)
-            .with_tag(TAG), // logcat 中的 TAG
-    );
+    #[cfg(target_os = "android")]
+    {
+        use tracing_subscriber::layer::SubscriberExt;
+        
+        let android_layer = tracing_android::layer(TAG).unwrap();
+        let subscriber = tracing_subscriber::registry().with(android_layer);
+        let _ = tracing::subscriber::set_global_default(subscriber);
+    }
+    
+    #[cfg(not(target_os = "android"))]
+    {
+        use tracing_subscriber::EnvFilter;
+        
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("info"))
+            )
+            .try_init()
+            .ok();
+    }
 }
 
 // Rust String -> Java String
