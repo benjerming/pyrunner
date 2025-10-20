@@ -200,14 +200,15 @@ impl TaskExecutor {
         match task_function(sender, task_id) {
             Ok(()) => {
                 sender.send_task_completed(task_id);
-                info!("线程任务执行成功: {}", task_id);
+                info!("task_id: {task_id} 线程任务执行成功");
                 Ok(())
             }
             Err(e) => {
-                let msg = format!("线程任务执行失败: {}", e);
-                sender.send_task_error(task_id, msg.clone());
-                error!("线程任务执行失败: {} - {}", task_id, msg);
-                Err(e)
+                error!("task_id: {task_id} 线程任务执行失败: {e}");
+                let msg = format!("task_id: {task_id} 线程任务执行失败: {e}");
+                let error = PyRunnerError::task_execution_failed(msg);
+                sender.send_task_error(task_id, &error);
+                Err(error)
             }
         }
     }
