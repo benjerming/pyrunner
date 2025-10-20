@@ -1,22 +1,19 @@
 use crate::error::{PyRunnerError, Result};
 use crate::ipc::MessageSender;
-use tracing::{error, info, warn};
 use std::sync::Arc;
+use tracing::{error, info, warn};
 
-/// 任务执行器，支持线程和进程两种执行模式
 pub enum TaskExecutor {
-    /// 线程模式：使用tokio线程池执行任务
     Thread {
         task_function: Arc<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>,
     },
-    /// 进程模式：在Unix上使用fork创建子进程，在Windows上使用线程模拟
+
     Process {
         task_function: Box<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>,
     },
 }
 
 impl TaskExecutor {
-    /// 创建一个线程模式的任务执行器
     pub fn new_thread<F>(task_function: F) -> Self
     where
         F: Fn(&MessageSender, u64) -> Result<()> + Send + Sync + 'static,
@@ -26,7 +23,6 @@ impl TaskExecutor {
         }
     }
 
-    /// 创建一个进程模式的任务执行器
     pub fn new_process<F>(task_function: F) -> Self
     where
         F: Fn(&MessageSender, u64) -> Result<()> + Send + Sync + 'static,
@@ -36,13 +32,11 @@ impl TaskExecutor {
         }
     }
 
-    /// 执行任务（同步接口）
     pub fn execute(&self, task_id: u64, sender: &MessageSender) -> Result<()> {
         let rt = tokio::runtime::Runtime::new()?;
         rt.block_on(self.execute_async(task_id, sender))
     }
 
-    /// 执行任务（异步接口）
     pub async fn execute_async(&self, task_id: u64, sender: &MessageSender) -> Result<()> {
         match self {
             Self::Thread { task_function } => {
@@ -54,7 +48,6 @@ impl TaskExecutor {
         }
     }
 
-    /// 线程模式执行
     async fn execute_thread(
         &self,
         task_id: u64,
@@ -67,17 +60,19 @@ impl TaskExecutor {
         let task_id_clone = task_id;
         let sender_clone = sender.clone();
 
-        let result = tokio::task::spawn_blocking(move || match task_function(&sender_clone, task_id_clone) {
-            Ok(()) => {
-                sender_clone.send_task_completed(task_id_clone);
-                info!("线程任务执行成功: {}", task_id_clone);
-                Ok(())
-            }
-            Err(e) => {
-                let error_msg = format!("线程任务执行失败: {}", e);
-                sender_clone.send_task_error(task_id_clone, error_msg.clone());
-                error!("线程任务执行失败: {} - {}", task_id_clone, error_msg);
-                Err(e)
+        let result = tokio::task::spawn_blocking(move || {
+            match task_function(&sender_clone, task_id_clone) {
+                Ok(()) => {
+                    sender_clone.send_task_completed(task_id_clone);
+                    info!("线程任务执行成功: {}", task_id_clone);
+                    Ok(())
+                }
+                Err(e) => {
+                    let msg = format!("线程任务执行失败: {}", e);
+                    sender_clone.send_task_error_msg(task_id_clone, msg.clone());
+                    error!("线程任务执行失败: {} - {}", task_id_clone, msg);
+                    Err(e)
+                }
             }
         })
         .await;
@@ -85,14 +80,13 @@ impl TaskExecutor {
         match result {
             Ok(task_result) => task_result,
             Err(join_error) => {
-                let error_msg = format!("线程执行失败: {}", join_error);
-                sender.send_task_error(task_id, error_msg.clone());
-                Err(PyRunnerError::task_execution_failed(error_msg))
+                let msg = format!("线程执行失败: {}", join_error);
+                sender.send_task_error_msg(task_id, msg.clone());
+                Err(PyRunnerError::task_execution_failed(msg))
             }
         }
     }
 
-    /// 进程模式执行
     async fn execute_process(
         &self,
         task_id: u64,
@@ -114,7 +108,6 @@ impl TaskExecutor {
         }
     }
 
-    /// Unix系统下使用fork执行
     #[cfg(unix)]
     async fn execute_with_fork(
         &self,
@@ -123,74 +116,80 @@ impl TaskExecutor {
         task_function: &Box<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>,
     ) -> Result<()> {
         use nix::sys::wait::{WaitStatus, waitpid};
-        use nix::unistd::{ForkResult, fork};
+        use nix::unistd::{ForkResult, fork, getpid};
         use std::process;
 
         match unsafe { fork() } {
             Ok(ForkResult::Parent { child }) => {
-                // 父进程
-                info!("execute_with_fork: {} 父进程等待子进程完成，子进程PID: {}", task_id, child);
+                info!(
+                    "task_id: {task_id}, for成功 当前父进程PID: {}, 子进程PID: {child}",
+                    getpid()
+                );
 
                 match waitpid(child, None) {
-                    Ok(WaitStatus::Exited(_, exit_code)) => {
-                        if exit_code == 0 {
-                            // info!("子进程任务执行成功: {}", task_id);
-                            // 父进程在子进程完成后发送完成消息
-                            // sender.send_task_completed(task_id);
-                            Ok(())
-                        } else {
-                            let error_msg = format!("子进程执行失败，退出码: {}", exit_code);
-                            sender.send_task_error(task_id, error_msg.clone());
-                            error!("execute_with_fork: 子进程任务执行失败 (任务ID: {}): {}", task_id, error_msg);
-                            Err(PyRunnerError::task_execution_failed(error_msg))
-                        }
-                    }
-                    Ok(WaitStatus::Signaled(_, signal, _)) => {
-                        let error_msg = format!("子进程被信号终止: {:?}", signal);
-                        sender.send_task_error(task_id, error_msg.clone());
-                        warn!("execute_with_fork: 子进程被信号终止 (任务ID: {}): {}", task_id, error_msg);
+                    Ok(WaitStatus::Exited(_, 0)) => {
+                        info!("task_id: {task_id} 父进程回收子进程 {child} 完成");
                         Ok(())
                     }
-                    Ok(status) => {
-                        let error_msg = format!("子进程异常终止: {:?}", status);
-                        sender.send_task_error(task_id, error_msg.clone());
-                        error!("execute_with_fork: 子进程异常终止 (任务ID: {}): {}", task_id, error_msg);
-                        Err(PyRunnerError::task_execution_failed(error_msg))
+                    Ok(WaitStatus::Exited(_, exit_code)) => {
+                        error!("task_id: {task_id} 父进程检测到子进程失败退出码: {exit_code}");
+                        let msg =
+                            format!("task_id: {task_id} 父进程检测到子进程失败退出码: {exit_code}");
+                        let error = PyRunnerError::task_execution_failed(msg);
+                        sender.send_task_error(task_id, &error);
+                        Err(error)
+                    }
+                    Ok(WaitStatus::Signaled(_, signal, _)) => {
+                        error!("task_id: {task_id} 父进程检测到子进程被信号终止: {signal}");
+                        let msg =
+                            format!("task_id: {task_id} 父进程检测到子进程被信号终止: {signal}");
+                        let error = PyRunnerError::task_execution_failed(msg);
+                        sender.send_task_error(task_id, &error);
+                        Err(error)
+                    }
+                    Ok(wait_status) => {
+                        error!("task_id: {task_id} 父进程WaitStatus: {wait_status:?}");
+                        let msg = format!("task_id: {task_id} 父进程WaitStatus: {wait_status:?}");
+                        let error = PyRunnerError::task_execution_failed(msg);
+                        sender.send_task_error(task_id, &error);
+                        Err(error)
                     }
                     Err(e) => {
-                        let error_msg = format!("等待子进程失败: {}", e);
-                        sender.send_task_error(task_id, error_msg.clone());
-                        Err(PyRunnerError::task_execution_failed(error_msg))
+                        error!("task_id: {task_id} 回收子进程失败: {e}");
+                        let msg = format!("task_id: {task_id} 回收子进程失败: {e}");
+                        let error = PyRunnerError::task_execution_failed(msg);
+                        sender.send_task_error(task_id, &error);
+                        Err(error)
                     }
                 }
             }
             Ok(ForkResult::Child) => {
-                info!("在子进程中执行任务: {}", task_id);
+                info!("task_id: {task_id} 子进程创建成功");
 
                 let exit_code = match task_function(sender, task_id) {
-                    Ok(()) => {
-                        info!("execute_with_fork: {} 子进程任务执行成功", task_id);
-                        // 注意：不在子进程中发送完成消息，因为父进程会在等待完成后发送
-                        0
-                    }
+                    Ok(()) => 0,
                     Err(e) => {
-                        error!("子进程任务执行失败: {}", e);
-                        sender.send_task_error(task_id, e.to_string());
+                        error!("task_id: {task_id} 子进程任务执行失败: {e}");
+                        let msg = format!("task_id: {task_id} 子进程任务执行失败: {e}");
+                        let error = PyRunnerError::task_execution_failed(msg);
+                        sender.send_task_error(task_id, &error);
                         1
                     }
                 };
 
+                info!("task_id: {task_id} 子进程结束 退出码: {exit_code}");
                 process::exit(exit_code);
             }
             Err(e) => {
-                let error_msg = format!("fork失败: {}", e);
-                sender.send_task_error(task_id, error_msg.clone());
-                Err(PyRunnerError::task_execution_failed(error_msg))
+                error!("task_id: {task_id} fork失败: {e}");
+                let msg = format!("task_id: {task_id} fork失败: {e}");
+                let error = PyRunnerError::task_execution_failed(msg);
+                sender.send_task_error(task_id, &error);
+                Err(error)
             }
         }
     }
 
-    /// Windows系统下使用线程模拟进程执行
     #[cfg(windows)]
     async fn execute_with_thread(
         &self,
@@ -205,9 +204,9 @@ impl TaskExecutor {
                 Ok(())
             }
             Err(e) => {
-                let error_msg = format!("线程任务执行失败: {}", e);
-                sender.send_task_error(task_id, error_msg.clone());
-                error!("线程任务执行失败: {} - {}", task_id, error_msg);
+                let msg = format!("线程任务执行失败: {}", e);
+                sender.send_task_error(task_id, msg.clone());
+                error!("线程任务执行失败: {} - {}", task_id, msg);
                 Err(e)
             }
         }
@@ -233,10 +232,10 @@ mod tests {
             for i in 1..=5 {
                 thread::sleep(Duration::from_millis(200));
                 sender.send_task_progress(task_id, i, 5);
-                println!("执行步骤 {}/5", i);
+                info!("执行步骤 {}/5", i);
             }
 
-            println!("任务执行成功");
+            info!("任务执行成功");
             Ok(())
         };
 
@@ -249,7 +248,7 @@ mod tests {
             loop {
                 match receiver.try_recv_timeout(Duration::from_secs(3)) {
                     Ok(msg) => {
-                        println!("收到消息: {:?}", msg);
+                        info!("收到消息: {:?}", msg);
                         let mut msgs = messages_clone.lock().unwrap();
                         msgs.push(msg);
                     }
@@ -265,7 +264,7 @@ mod tests {
         assert!(result.is_ok());
 
         let messages = messages.lock().unwrap();
-        assert!(messages.len() >= 5); // 测试用例发送5条消息
+        assert!(messages.len() >= 5);
     }
 
     #[test]
@@ -276,22 +275,19 @@ mod tests {
             use std::thread;
             use std::time::Duration;
 
-            // 在子进程或线程中执行简单任务
             for i in 1..=3 {
                 thread::sleep(Duration::from_millis(50));
-                println!("执行步骤 {}/3", i);
+                info!("执行步骤 {}/3", i);
             }
 
-            println!("任务执行成功");
+            info!("任务执行成功");
             Ok(())
         };
 
         let executor = TaskExecutor::new_process(task_fn);
 
-        // 执行任务 - 在Unix上会fork子进程，在Windows上会使用线程
         let result = executor.execute(1, &sender);
-        
-        // 验证任务执行成功
+
         assert!(result.is_ok());
     }
 }

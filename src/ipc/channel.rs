@@ -1,10 +1,7 @@
-use ipc_channel::ipc::{self, IpcReceiver};
 use super::message::Message;
 use super::sender::MessageSender;
+use ipc_channel::ipc::{self, IpcReceiver};
 
-/// 创建消息通道
-/// 
-/// 返回一个元组，包含消息发送者和接收者
 pub fn create_message_channel() -> (MessageSender, IpcReceiver<Message>) {
     let (sender, receiver) = ipc::channel().expect("Failed to create IPC channel");
     let message_sender = MessageSender::new(sender);
@@ -13,19 +10,20 @@ pub fn create_message_channel() -> (MessageSender, IpcReceiver<Message>) {
 
 #[cfg(test)]
 mod tests {
+    use super::super::message::ProgressMessage;
     use super::*;
-    use super::super::message::ProgressInfo;
     use std::time::Duration;
 
     #[test]
     fn test_create_channel() {
         let (sender, receiver) = create_message_channel();
-        
-        // 测试通道是否可用
-        let progress = ProgressInfo::new(1);
-        sender.send_progress(progress).unwrap();
-        
-        let msg = receiver.try_recv_timeout(Duration::from_millis(100)).unwrap();
+
+        let progress = ProgressMessage::new(1);
+        sender.send_progress_safe(progress);
+
+        let msg = receiver
+            .try_recv_timeout(Duration::from_millis(100))
+            .unwrap();
         if let Message::Progress(p) = msg {
             assert_eq!(p.task_id, 1);
         } else {
@@ -33,4 +31,3 @@ mod tests {
         }
     }
 }
-

@@ -1,9 +1,8 @@
 use crate::error::Result;
 use crate::ipc::{MessageReceiver, MessageSender, create_message_channel};
-use tracing::error;
 use std::thread;
+use tracing::error;
 
-// 导出消息相关类型
 pub use crate::ipc::{ConsoleProgressListener, MessageListener};
 pub use crate::task_executor::TaskExecutor;
 
@@ -73,7 +72,10 @@ mod tests {
         };
 
         let executor = crate::task_executor::TaskExecutor::new_thread(task_fn);
-        let listeners = vec![Box::new(ConsoleProgressListener::new()) as Box<dyn MessageListener>];
+        let listeners = vec![
+            Box::new(ConsoleProgressListener::new(1, tracing::Span::current()))
+                as Box<dyn MessageListener>,
+        ];
 
         let result = run_task_with_monitoring(1, executor, listeners);
 

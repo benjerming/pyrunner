@@ -1,42 +1,35 @@
-use serde::{Deserialize, Serialize};
 use crate::error::PyRunnerError;
+use serde::{Deserialize, Serialize};
 
-/// 统一的消息枚举，支持多种消息类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Message {
-    /// 进度消息
-    Progress(ProgressInfo),
-    /// 错误消息
-    Error(ErrorInfo),
-    /// 结果消息
-    Result(ResultInfo),
+    Progress(ProgressMessage),
+    Error(ErrorMessage),
+    Result(ResultMessage),
 }
 
-/// 进度信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProgressInfo {
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub struct ProgressMessage {
     pub task_id: u64,
     pub done: u64,
     pub size: u64,
 }
 
-/// 错误信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ErrorInfo {
+pub struct ErrorMessage {
     pub task_id: u64,
     pub error_code: i32,
     pub error_message: String,
 }
 
-/// 执行结果信息
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ResultInfo {
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub struct ResultMessage {
     pub task_id: u64,
     pub pages: u64,
     pub words: u64,
 }
 
-impl ProgressInfo {
+impl ProgressMessage {
     pub fn new(task_id: u64) -> Self {
         Self {
             task_id,
@@ -51,7 +44,7 @@ impl ProgressInfo {
     }
 }
 
-impl ErrorInfo {
+impl ErrorMessage {
     pub fn new(task_id: u64, error: &PyRunnerError) -> Self {
         Self {
             task_id,
@@ -69,7 +62,7 @@ impl ErrorInfo {
     }
 }
 
-impl ResultInfo {
+impl ResultMessage {
     pub fn new(task_id: u64, pages: u64, words: u64) -> Self {
         Self {
             task_id,
@@ -85,7 +78,7 @@ mod tests {
 
     #[test]
     fn test_progress_info() {
-        let mut progress = ProgressInfo::new(1);
+        let mut progress = ProgressMessage::new(1);
         assert_eq!(progress.task_id, 1);
         assert_eq!(progress.done, 0);
         assert_eq!(progress.size, 0);
@@ -98,7 +91,7 @@ mod tests {
     #[test]
     fn test_error_info() {
         let error = PyRunnerError::task_execution_failed("测试错误");
-        let error_info = ErrorInfo::new(1, &error);
+        let error_info = ErrorMessage::new(1, &error);
         assert_eq!(error_info.task_id, 1);
         assert_eq!(error_info.error_code, 1001);
         assert!(error_info.error_message.contains("测试错误"));
@@ -106,11 +99,10 @@ mod tests {
 
     #[test]
     fn test_result_info() {
-        let result_info = ResultInfo::new(1, 10, 5000);
-        
+        let result_info = ResultMessage::new(1, 10, 5000);
+
         assert_eq!(result_info.task_id, 1);
         assert_eq!(result_info.pages, 10);
         assert_eq!(result_info.words, 5000);
     }
 }
-

@@ -1,7 +1,5 @@
 use std::env;
-use tracing::{error, info, instrument};
-
-// 引入错误处理模块用于演示
+use tracing::{Span, error, info, instrument};
 
 mod error;
 mod ipc;
@@ -15,19 +13,28 @@ use progress_monitor::{
 };
 
 fn init_logger() {
-    use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+    use tracing_indicatif::filter::IndicatifFilter;
+    use tracing_indicatif::style::ProgressStyle;
+    use tracing_subscriber::{
+        EnvFilter, layer::SubscriberExt, prelude::*, util::SubscriberInitExt,
+    };
 
-    let indicatif_layer = tracing_indicatif::IndicatifLayer::new();
+    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let indicatif_layer = tracing_indicatif::IndicatifLayer::new().with_progress_style(
+        ProgressStyle::with_template(
+            "[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}",
+        )
+        .unwrap(),
+    );
 
     tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
-        .with(indicatif_layer)
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stdout_writer()))
+        .with(indicatif_layer.with_filter(IndicatifFilter::new(false)))
         .init();
 }
 
 fn main() {
-    // 初始化日志
     init_logger();
 
     info!("启动 PyRunner 进度监控演示程序");
@@ -74,52 +81,56 @@ fn task_fn(sender: &MessageSender, task_id: u64) -> std::result::Result<(), erro
 
     sender.send_task_started(task_id);
 
-    for i in 1..=100 {
-        thread::sleep(Duration::from_millis(100));
-        sender.send_task_progress(task_id, i, 100);
+    for i in 1..=40 {
+        thread::sleep(Duration::from_millis(40));
+        sender.send_task_progress(task_id, i, 40);
     }
 
-    // info!("任务执行成功");
     sender.send_task_completed(task_id);
     Ok(())
 }
 
-#[instrument]
+#[instrument(fields(indicatif.pb_show = tracing::field::Empty))]
 fn demo_thread_task() {
-    info!("🧵 开始演示子线程任务执行\n");
+    info!("🧵 开始演示子线程任务执行");
 
+    let task_id = 1;
     let executor = TaskExecutor::new_thread(task_fn);
-    let listeners = vec![Box::new(ConsoleProgressListener::new()) as Box<dyn MessageListener>];
+    let listener = ConsoleProgressListener::new(task_id, Span::current());
+    let listeners = vec![Box::new(listener) as Box<dyn MessageListener>];
 
-    match run_task_with_monitoring(1, executor, listeners) {
-        Ok(_) => info!("\n✅ 子线程任务执行演示完成"),
+    match run_task_with_monitoring(task_id, executor, listeners) {
+        Ok(_) => info!("✅ 子线程任务执行演示完成"),
         Err(e) => error!("任务执行失败: {}", e),
     }
 }
 
+#[instrument(fields(indicatif.pb_show = tracing::field::Empty))]
 fn demo_process_task() {
-    info!("🐍 开始演示子进程任务执行\n");
+    info!("🐍 开始演示子进程任务执行");
 
+    let task_id = 2;
     let executor = TaskExecutor::new_process(task_fn);
-    let listeners = vec![Box::new(ConsoleProgressListener::new()) as Box<dyn MessageListener>];
+    let listener = ConsoleProgressListener::new(task_id, Span::current());
+    let listeners = vec![Box::new(listener) as Box<dyn MessageListener>];
 
-    match run_task_with_monitoring(2, executor, listeners) {
-        Ok(_) => info!("\n✅ 子进程任务执行演示完成"),
+    match run_task_with_monitoring(task_id, executor, listeners) {
+        Ok(_) => info!("✅ 子进程任务执行演示完成"),
         Err(e) => error!("任务执行失败: {}", e),
     }
 }
 
 fn demo_all_tasks() {
-    info!("🎯 开始运行进度监控演示\n");
+    info!("🎯 开始运行进度监控演示");
     info!("{}", "=".repeat(60));
 
     demo_thread_task();
 
-    info!("\n{}", "=".repeat(60));
+    info!("{}", "=".repeat(60));
 
     demo_process_task();
 
-    info!("\n{}", "=".repeat(60));
+    info!("{}", "=".repeat(60));
 
-    info!("\n🎊 所有演示完成！");
+    info!("🎊 所有演示完成！");
 }
