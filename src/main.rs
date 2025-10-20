@@ -78,7 +78,7 @@ fn task_fn(sender: &MessageSender, task_id: u64) -> std::result::Result<(), erro
     for i in 1..=100 {
         thread::sleep(Duration::from_millis(100));
         let percentage = (i as f64 / 100.0) * 100.0;
-        sender.send_task_progress(task_id, percentage, format!("执行步骤 {}/5", i));
+        sender.send_task_progress(task_id, percentage, format!("执行步骤 {}/100", i));
         // println!("执行步骤 {}/5", i);
     }
 
