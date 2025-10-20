@@ -102,6 +102,8 @@ impl TaskExecutor {
 
         #[cfg(windows)]
         {
+            use tracing::warn;
+
             warn!("Windows系统不支持fork，使用线程模拟子进程执行");
             self.execute_with_thread(task_id, sender, task_function)
                 .await
