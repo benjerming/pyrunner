@@ -65,7 +65,6 @@ fn print_usage() {
     println!("选项:");
     println!("  thread     - 运行子线程任务演示");
     println!("  process    - 运行子进程任务演示");
-    println!("  error      - 运行错误处理演示");
     println!("  all        - 运行所有演示（默认）");
 }
 
