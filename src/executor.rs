@@ -16,7 +16,7 @@ impl TaskExecutor {
     }
 
     #[instrument(skip(self, listener))]
-    pub async fn execute<L>(&self, mut listener: L) -> Result<()>
+    pub async fn execute<L>(&self, listener: &mut L) -> Result<()>
     where
         L: MessageListener,
     {
@@ -86,5 +86,39 @@ impl TaskExecutor {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct TestProgressListener {
+        progress_count: u32,
+        error_count: u32,
+        result_count: u32,
+    }
+    impl crate::listener::MessageListener for TestProgressListener {
+        fn on_error(&mut self, _error: crate::ipc::ErrorMessage) {
+            self.error_count += 1;
+        }
+        fn on_result(&mut self, _result: crate::ipc::ResultMessage) {
+            self.result_count += 1;
+        }
+        fn on_progress(&mut self, _progress: crate::ipc::ProgressMessage) {
+            self.progress_count += 1;
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute() {
+        let executor = TaskExecutor::new("python".into(), vec!["src/demo_progress.py".into()]);
+
+        let mut test_listener = TestProgressListener::default();
+        let _ = executor.execute(&mut test_listener).await.unwrap();
+        assert_eq!(test_listener.progress_count, 10);
+        assert_eq!(test_listener.error_count, 0);
+        assert_eq!(test_listener.result_count, 1);
     }
 }

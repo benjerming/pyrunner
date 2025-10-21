@@ -44,9 +44,9 @@ async fn demo_process_task() {
 
     let task_id = 2;
     let executor = TaskExecutor::new("python".into(), vec!["src/demo_progress.py".into()]);
-    let listener = ConsoleProgressListener::new(task_id, Span::current());
+    let mut listener = ConsoleProgressListener::new(task_id, Span::current());
 
-    match executor.execute(listener).await {
+    match executor.execute(&mut listener).await {
         Ok(_) => info!("✅ 任务执行成功"),
         Err(e) => error!("❌ 任务执行失败: {}", e),
     }
