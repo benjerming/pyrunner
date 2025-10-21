@@ -1,74 +1,58 @@
 use crate::error::PyRunnerError;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum Message {
     Progress(ProgressMessage),
     Error(ErrorMessage),
     Result(ResultMessage),
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProgressMessage {
-    pub task_id: u64,
     pub done: u64,
     pub size: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ErrorMessage {
-    pub task_id: u64,
     pub error_code: i32,
     pub error_message: String,
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ResultMessage {
-    pub task_id: u64,
     pub pages: u64,
     pub words: u64,
 }
 
 impl ProgressMessage {
-    pub fn new(task_id: u64) -> Self {
-        Self {
-            task_id,
-            done: 0,
-            size: 0,
-        }
-    }
-
-    pub fn update_progress(&mut self, done: u64, size: u64) {
-        self.done = done;
-        self.size = size;
+    pub fn new(done: u64, size: u64) -> Self {
+        Self { done, size }
     }
 }
 
-impl ErrorMessage {
-    pub fn new(task_id: u64, error: &PyRunnerError) -> Self {
+impl From<&PyRunnerError> for ErrorMessage {
+    fn from(error: &PyRunnerError) -> Self {
         Self {
-            task_id,
             error_code: error.error_code(),
             error_message: error.to_string(),
         }
     }
+}
 
-    pub fn from_string(task_id: u64, error_message: String) -> Self {
+impl ErrorMessage {
+    pub fn new(error_code: i32, error_message: String) -> Self {
         Self {
-            task_id,
-            error_code: 9999,
+            error_code,
             error_message,
         }
     }
 }
 
 impl ResultMessage {
-    pub fn new(task_id: u64, pages: u64, words: u64) -> Self {
-        Self {
-            task_id,
-            pages,
-            words,
-        }
+    pub fn new(pages: u64, words: u64) -> Self {
+        Self { pages, words }
     }
 }
 
@@ -77,48 +61,65 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_progress_info() {
-        let mut progress = ProgressMessage::new(1);
-        assert_eq!(progress.task_id, 1);
-        assert_eq!(progress.done, 0);
-        assert_eq!(progress.size, 0);
+    fn test_message() {
+        let message = Message::Error(ErrorMessage::new(1001, "测试错误".into()));
+        let serialized = serde_json::to_string(&message).unwrap();
+        println!("Message(Error(ErrorMessage)) serialized: {serialized}");
+        let deserialized: Message = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, message);
 
-        progress.update_progress(50, 100);
-        assert_eq!(progress.done, 50);
+        let message = Message::Progress(ProgressMessage::new(0, 100));
+        let serialized = serde_json::to_string(&message).unwrap();
+        println!("Message(Progress(ProgressMessage)) serialized: {serialized}");
+        let deserialized: Message = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, message);
+
+        let message = Message::Result(ResultMessage::new(10, 5000));
+        let serialized = serde_json::to_string(&message).unwrap();
+        println!("Message(Result(ResultMessage)) serialized: {serialized}");
+        let deserialized: Message = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, message);
+    }
+
+    #[test]
+    fn test_progress_info() {
+        let progress = ProgressMessage::new(0, 100);
+        assert_eq!(progress.done, 0);
         assert_eq!(progress.size, 100);
 
-        let serialized = bincode::serialize(&progress).unwrap();
-        let deserialized: ProgressMessage = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(deserialized.task_id, 1);
-        assert_eq!(deserialized.done, 50);
+        let serialized = serde_json::to_string(&progress).unwrap();
+        println!("ProgressMessage serialized: {serialized}");
+        let deserialized: ProgressMessage = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.done, 0);
         assert_eq!(deserialized.size, 100);
     }
 
     #[test]
     fn test_error_info() {
         let error = PyRunnerError::task_execution_failed("测试错误");
-        let error_info = ErrorMessage::new(1, &error);
-        assert_eq!(error_info.task_id, 1);
-        assert_eq!(error_info.error_code, 1001);
-        assert!(error_info.error_message.contains("测试错误"));
+        let code = error.error_code();
+        let message = error.to_string();
 
-        let serialized = bincode::serialize(&error_info).unwrap();
-        let deserialized: ErrorMessage = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(deserialized.task_id, 1);
-        assert_eq!(deserialized.error_code, 1001);
-        assert!(deserialized.error_message.contains("测试错误"));
+        let error_info = ErrorMessage::from(&error);
+        assert_eq!(error_info.error_code, code);
+        assert_eq!(error_info.error_message, message);
+
+        let serialized = serde_json::to_string(&error_info).unwrap();
+        println!("ErrorMessage serialized: {serialized}");
+        let deserialized: ErrorMessage = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.error_code, code);
+        assert_eq!(deserialized.error_message, message);
     }
 
     #[test]
     fn test_result_info() {
-        let result_info = ResultMessage::new(1, 10, 5000);
-        assert_eq!(result_info.task_id, 1);
+        let result_info = ResultMessage::new(10, 5000);
         assert_eq!(result_info.pages, 10);
         assert_eq!(result_info.words, 5000);
 
-        let serialized = bincode::serialize(&result_info).unwrap();
-        let deserialized: ResultMessage = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(deserialized.task_id, 1);
+        let serialized = serde_json::to_string(&result_info).unwrap();
+        println!("ResultMessage serialized: {serialized}");
+        let deserialized: ResultMessage = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized.pages, 10);
         assert_eq!(deserialized.words, 5000);
     }

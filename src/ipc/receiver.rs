@@ -1,51 +1,10 @@
-use super::message::{ErrorMessage, Message, ProgressMessage, ResultMessage};
+use super::message::Message;
+use crate::listener::MessageListener;
 use ipc_channel::ipc::{IpcError, IpcReceiver, TryRecvError};
 use std::sync::Mutex;
 use std::{sync::Arc, time::Duration};
-use tracing::{info_span, instrument, trace};
-#[allow(unused_imports)]
-use tracing::{Span, debug, error, info};
-use tracing_indicatif::span_ext::IndicatifSpanExt;
-
-pub trait MessageListener: Send + Sync {
-    fn on_progress(&mut self, progress: &ProgressMessage);
-    fn on_error(&mut self, error: &ErrorMessage);
-    fn on_result(&mut self, result: &ResultMessage);
-}
-
-pub struct ConsoleProgressListener {
-    span: Span,
-}
-
-impl ConsoleProgressListener {
-    pub fn new(task_id: u64, span: Span) -> Self {
-        span.pb_set_message(&format!("task_id: {task_id}"));
-        Self { span }
-    }
-}
-
-impl MessageListener for ConsoleProgressListener {
-    fn on_progress(&mut self, progress: &ProgressMessage) {
-        if progress.size > 0 {
-            self.span.pb_set_length(progress.size);
-        }
-        self.span.pb_set_position(progress.done);
-        self.span
-            .pb_set_message(&format!("task_id: {}", progress.task_id));
-    }
-
-    fn on_error(&mut self, error: &ErrorMessage) {
-        self.span
-            .pb_set_finish_message(&format!("❌ 任务出错: {}", error.error_message));
-    }
-
-    fn on_result(&mut self, result: &ResultMessage) {
-        self.span.pb_set_finish_message(&format!(
-            "✅ 任务完成: {} 页，{} 字",
-            result.pages, result.words
-        ));
-    }
-}
+use tracing::{error, info};
+use tracing::{instrument};
 
 pub struct MessageReceiver {
     receiver: IpcReceiver<Message>,
@@ -102,7 +61,7 @@ impl MessageReceiver {
                 Ok(message) => {
                     info!("{message:?}");
 
-                    match &message {
+                    match message {
                         Message::Progress(progress) => {
                             for listener in &self.listeners {
                                 if let Ok(mut l) = listener.lock() {
@@ -110,10 +69,10 @@ impl MessageReceiver {
                                 }
                             }
                         }
-                        Message::Error(error) => {
+                        Message::Error(e) => {
                             for listener in &self.listeners {
                                 if let Ok(mut l) = listener.lock() {
-                                    l.on_error(error);
+                                    l.on_error(e.clone());
                                 }
                             }
                         }

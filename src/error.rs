@@ -56,8 +56,8 @@ pub enum PyRunnerError {
     ProcessCreationFailed(String),
 
     #[allow(dead_code)]
-    #[error("进程执行失败: 退出码 {exit_code}")]
-    ProcessExecutionFailed { exit_code: i32 },
+    #[error("进程执行失败: {0:?}")]
+    ProcessExecutionFailed(std::process::ExitStatus),
 
     #[cfg(unix)]
     #[error(transparent)]
@@ -198,7 +198,7 @@ impl PyRunnerError {
             Self::PermissionDenied { .. } => 4003,
             Self::JsonError(_) => 5001,
             Self::ProcessCreationFailed(_) => 6001,
-            Self::ProcessExecutionFailed { .. } => 6002,
+            Self::ProcessExecutionFailed(..) => 6002,
             #[cfg(unix)]
             Self::NixError(_) => 7001,
             Self::EnvVarError(_) => 7002,

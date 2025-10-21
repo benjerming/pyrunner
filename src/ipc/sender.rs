@@ -42,29 +42,28 @@ impl MessageSender {
     }
 
     #[allow(dead_code)]
-    pub fn send_task_started(&self, task_id: u64) {
-        let progress = ProgressMessage::new(task_id);
+    pub fn send_task_started(&self) {
+        let progress = ProgressMessage::new(0, 0);
         self.send_progress_safe(progress);
     }
 
-    pub fn send_task_progress(&self, task_id: u64, done: u64, size: u64) {
-        let mut progress = ProgressMessage::new(task_id);
-        progress.update_progress(done, size);
+    pub fn send_task_progress(&self, done: u64, size: u64) {
+        let progress = ProgressMessage::new(done, size);
         self.send_progress_safe(progress);
     }
 
-    pub fn send_task_completed(&self, task_id: u64) {
-        let result = ResultMessage::new(task_id, 0, 0);
+    pub fn send_task_completed(&self) {
+        let result = ResultMessage::new(100, 5000);
         self.send_result_safe(result);
     }
 
-    pub fn send_task_error_msg(&self, task_id: u64, error_msg: String) {
-        let error = ErrorMessage::from_string(task_id, error_msg);
+    pub fn send_task_error_msg(&self, error_msg: String) {
+        let error = ErrorMessage::new(1001, error_msg);
         self.send_error_safe(error);
     }
 
-    pub fn send_task_error(&self, task_id: u64, error: &PyRunnerError) {
-        let error_info = ErrorMessage::new(task_id, error);
+    pub fn send_task_error(&self, error: &PyRunnerError) {
+        let error_info = ErrorMessage::from(error);
         self.send_error_safe(error_info);
     }
 

@@ -1,17 +1,14 @@
-use std::env;
 use tracing::{Span, error, info, instrument};
 
 mod error;
+mod executor;
 mod ipc;
 mod jni;
-mod executor;
+mod listener;
 
-use ipc::MessageSender;
-use ipc::ConsoleProgressListener;
 use executor::TaskExecutor;
 
-use std::sync::{Arc, Mutex};
-
+use crate::listener::ConsoleProgressListener;
 
 fn init_logger() {
     use tracing_indicatif::filter::IndicatifFilter;
@@ -35,103 +32,22 @@ fn init_logger() {
         .init();
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     init_logger();
-
-    info!("启动 PyRunner 进度监控演示程序");
-
-    match env::args().nth(1) {
-        Some(task) => match task.to_ascii_lowercase().as_str() {
-            "thread" | "t" => {
-                info!("运行子线程任务演示");
-                demo_thread_task();
-            }
-            "process" | "p" => {
-                info!("运行子进程任务演示");
-                demo_process_task();
-            }
-            "all" | "a" => {
-                info!("运行所有演示");
-                demo_all_tasks();
-            }
-            _ => {
-                error!("无效的任务类型: {task}");
-                print_usage();
-            }
-        },
-        None => {
-            info!("运行所有演示");
-            demo_all_tasks();
-        }
-    }
-
-    info!("程序执行完成");
-}
-
-fn print_usage() {
-    info!("用法: cargo run [选项]");
-    info!("选项:");
-    info!("  thread     - 运行子线程任务演示");
-    info!("  process    - 运行子进程任务演示");
-    info!("  all        - 运行所有演示（默认）");
-}
-
-fn task_fn(sender: &MessageSender, task_id: u64) -> std::result::Result<(), error::PyRunnerError> {
-    use std::thread;
-    use std::time::Duration;
-
-    sender.send_task_started(task_id);
-
-    for i in 1..=40 {
-        thread::sleep(Duration::from_millis(40));
-        sender.send_task_progress(task_id, i, 40);
-    }
-
-    sender.send_task_completed(task_id);
-    Ok(())
+    demo_process_task().await;
 }
 
 #[instrument(fields(indicatif.pb_show = tracing::field::Empty))]
-fn demo_thread_task() {
-    info!("🧵 开始演示子线程任务执行");
-
-    let task_id = 1;
-    let executor = TaskExecutor::new_thread(task_fn);
-    let listener = Arc::new(Mutex::new(ConsoleProgressListener::new(task_id, Span::current())));
-
-    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-    match rt.block_on(executor.run_with_monitoring(task_id, listener)) {
-        Ok(_) => info!("✅ 子线程任务执行演示完成"),
-        Err(e) => error!("任务执行失败: {}", e),
-    }
-}
-
-#[instrument(fields(indicatif.pb_show = tracing::field::Empty))]
-fn demo_process_task() {
-    info!("🐍 开始演示子进程任务执行");
+async fn demo_process_task() {
+    info!("开始执行任务");
 
     let task_id = 2;
-    let executor = TaskExecutor::new_process(task_fn);
-    let listener = Arc::new(Mutex::new(ConsoleProgressListener::new(task_id, Span::current())));
+    let executor = TaskExecutor::new("python".into(), vec!["src/demo_progress.py".into()]);
+    let listener = ConsoleProgressListener::new(task_id, Span::current());
 
-    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-    match rt.block_on(executor.run_with_monitoring(task_id, listener)) {
-        Ok(_) => info!("✅ 子进程任务执行演示完成"),
-        Err(e) => error!("任务执行失败: {}", e),
+    match executor.execute(listener).await {
+        Ok(_) => info!("✅ 任务执行成功"),
+        Err(e) => error!("❌ 任务执行失败: {}", e),
     }
-}
-
-fn demo_all_tasks() {
-    info!("🎯 开始运行进度监控演示");
-    info!("{}", "=".repeat(60));
-
-    demo_thread_task();
-
-    info!("{}", "=".repeat(60));
-
-    demo_process_task();
-
-    info!("{}", "=".repeat(60));
-
-    info!("🎊 所有演示完成！");
 }
