@@ -26,6 +26,7 @@ pub struct ResultMessage {
     pub words: u64,
 }
 
+#[allow(dead_code)]
 impl ProgressMessage {
     pub fn new(done: u64, size: u64) -> Self {
         Self { done, size }
@@ -41,6 +42,7 @@ impl From<&PyRunnerError> for ErrorMessage {
     }
 }
 
+#[allow(dead_code)]
 impl ErrorMessage {
     pub fn new(error_code: i32, error_message: String) -> Self {
         Self {
@@ -50,6 +52,7 @@ impl ErrorMessage {
     }
 }
 
+#[allow(dead_code)]
 impl ResultMessage {
     pub fn new(pages: u64, words: u64) -> Self {
         Self { pages, words }

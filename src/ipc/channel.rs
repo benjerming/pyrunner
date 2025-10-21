@@ -5,6 +5,7 @@ use super::sender::MessageSender;
 use crate::listener::MessageListener;
 use ipc_channel::ipc;
 
+#[allow(dead_code)]
 pub fn create_message_channel(
     listener: Arc<Mutex<dyn MessageListener>>,
 ) -> (MessageSender, MessageReceiver) {

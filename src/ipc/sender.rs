@@ -8,6 +8,7 @@ pub struct MessageSender {
     sender: IpcSender<Message>,
 }
 
+#[allow(dead_code)]
 impl MessageSender {
     pub fn new(sender: IpcSender<Message>) -> Self {
         Self { sender }
