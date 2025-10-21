@@ -17,12 +17,10 @@
 src/
 ├── lib.rs                  # 库入口
 ├── main.rs                 # 主程序入口
-├── message_sender.rs       # 消息发送器模块
-├── message_receiver.rs     # 消息接收器模块  
-├── task_executor.rs        # 任务执行器模块
-├── progress_monitor.rs     # 进度监控高级封装模块
-├── progress_demo.rs        # 演示程序
-├── demo_progress.py       # Python演示脚本
+├── ipc/                    # IPC 模块（sender/receiver/message）
+├── executor.rs             # 任务执行器模块（含便捷监控方法）
+├── main.rs                 # 演示程序
+├── demo_progress.py        # Python演示脚本
 └── ...                    # 其他模块
 ```
 
@@ -119,89 +117,56 @@ cargo run --bin pyrunner_demo process
 #### 子线程任务执行
 
 ```rust
-use pyrunner::progress_monitor::{
-    run_task_with_monitoring, ConsoleProgressListener, 
-    ThreadTaskExecutor, ProgressListener
-};
+use pyrunner::ipc::ConsoleProgressListener;
+use pyrunner::executor::TaskExecutor;
+use std::sync::{Arc, Mutex};
 
-// 创建任务执行器
-let executor = ThreadTaskExecutor::new(10, 20); // 10秒，20步
+let executor = TaskExecutor::new_thread(|sender, task_id| {
+    use std::{thread, time::Duration};
+    sender.send_task_started(task_id);
+    for i in 1..=20 { thread::sleep(Duration::from_millis(100)); sender.send_task_progress(task_id, i, 20); }
+    Ok(())
+});
 
-// 创建监听器
-let listeners = vec![
-    Box::new(ConsoleProgressListener) as Box<dyn ProgressListener>
-];
-
-// 运行任务并监控进度
-match run_task_with_monitoring("my_task".to_string(), executor, listeners) {
-    Ok(_) => println!("任务完成"),
-    Err(e) => println!("任务失败: {}", e),
-}
+let listener = Arc::new(Mutex::new(ConsoleProgressListener::new(1, tracing::Span::current())));
+executor.run_with_monitoring(1, listener)?;
 ```
 
 #### 子进程任务执行
 
 ```rust
-use pyrunner::progress_monitor::{
-    run_task_with_monitoring, ConsoleProgressListener, 
-    ProcessTaskExecutor, ProgressListener
-};
+use pyrunner::ipc::ConsoleProgressListener;
+use pyrunner::executor::TaskExecutor;
+use std::sync::{Arc, Mutex};
 
-// 创建任务执行器（不再启动子进程）
-let task_fn = || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use std::thread;
-    use std::time::Duration;
-    
-    // 模拟一些计算工作
-    for i in 1..=10 {
-        thread::sleep(Duration::from_millis(100));
-        println!("处理步骤 {}/10", i);
-    }
-    
-    println!("任务完成");
+let task_fn = |_sender: &pyrunner::ipc::MessageSender, _task_id: u64| -> anyhow::Result<()> {
+    use std::{thread, time::Duration};
+    for i in 1..=10 { thread::sleep(Duration::from_millis(100)); println!("处理步骤 {}/10", i); }
     Ok(())
 };
 
-let executor = ProcessTaskExecutor::new(task_fn);
-
-// 创建监听器
-let listeners = vec![
-    Box::new(ConsoleProgressListener) as Box<dyn ProgressListener>
-];
-
-// 运行任务并监控进度
-match run_task_with_monitoring("python_task".to_string(), executor, listeners) {
-    Ok(_) => println!("Python脚本执行完成"),
-    Err(e) => println!("Python脚本执行失败: {}", e),
-}
+let executor = TaskExecutor::new_process(task_fn);
+let listener = Arc::new(Mutex::new(ConsoleProgressListener::new(2, tracing::Span::current())));
+executor.run_with_monitoring(2, listener)?;
 ```
 
 #### 手动组装组件
 
 ```rust
-use pyrunner::message_sender::create_message_channel;
-use pyrunner::message_receiver::{MessageReceiver, ConsoleProgressListener};
-use pyrunner::task_executor::{ThreadTaskExecutor, TaskExecutor};
-use std::thread;
+use pyrunner::ipc::{create_message_channel, MessageReceiver, ConsoleProgressListener};
+use pyrunner::executor::TaskExecutor;
+use std::{sync::{Arc, Mutex}, thread};
 
-// 创建消息通道
-let (sender, receiver) = create_message_channel();
+let (sender, receiver) = create_message_channel(Arc::new(Mutex::new(ConsoleProgressListener::new(3, tracing::Span::current()))));
 
-// 创建消息接收器并添加监听器
-let mut message_receiver = MessageReceiver::new(receiver);
-message_receiver.add_listener(Box::new(ConsoleProgressListener));
-
-// 在子线程中启动监听
 let monitor_handle = thread::spawn(move || {
-    message_receiver.start_listening();
+    receiver.start_listening();
 });
 
-// 创建并执行任务
-let executor = ThreadTaskExecutor::new(5, 10);
-let result = executor.execute("my_task".to_string(), &sender);
+let executor = TaskExecutor::new_thread(|_sender, _task_id| Ok(()));
+let _ = executor.execute(3, &sender);
 
-// 等待完成
-monitor_handle.join().unwrap();
+let _ = monitor_handle.join();
 ```
 
 ## 演示效果

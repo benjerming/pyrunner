@@ -4,13 +4,14 @@ use tracing::{Span, error, info, instrument};
 mod error;
 mod ipc;
 mod jni;
-mod progress_monitor;
-mod task_executor;
+mod executor;
 
 use ipc::MessageSender;
-use progress_monitor::{
-    ConsoleProgressListener, MessageListener, TaskExecutor, run_task_with_monitoring,
-};
+use ipc::ConsoleProgressListener;
+use executor::TaskExecutor;
+
+use std::sync::{Arc, Mutex};
+
 
 fn init_logger() {
     use tracing_indicatif::filter::IndicatifFilter;
@@ -96,10 +97,10 @@ fn demo_thread_task() {
 
     let task_id = 1;
     let executor = TaskExecutor::new_thread(task_fn);
-    let listener = ConsoleProgressListener::new(task_id, Span::current());
-    let listeners = vec![Box::new(listener) as Box<dyn MessageListener>];
+    let listener = Arc::new(Mutex::new(ConsoleProgressListener::new(task_id, Span::current())));
 
-    match run_task_with_monitoring(task_id, executor, listeners) {
+    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    match rt.block_on(executor.run_with_monitoring(task_id, listener)) {
         Ok(_) => info!("✅ 子线程任务执行演示完成"),
         Err(e) => error!("任务执行失败: {}", e),
     }
@@ -111,10 +112,10 @@ fn demo_process_task() {
 
     let task_id = 2;
     let executor = TaskExecutor::new_process(task_fn);
-    let listener = ConsoleProgressListener::new(task_id, Span::current());
-    let listeners = vec![Box::new(listener) as Box<dyn MessageListener>];
+    let listener = Arc::new(Mutex::new(ConsoleProgressListener::new(task_id, Span::current())));
 
-    match run_task_with_monitoring(task_id, executor, listeners) {
+    let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+    match rt.block_on(executor.run_with_monitoring(task_id, listener)) {
         Ok(_) => info!("✅ 子进程任务执行演示完成"),
         Err(e) => error!("任务执行失败: {}", e),
     }

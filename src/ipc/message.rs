@@ -86,6 +86,12 @@ mod tests {
         progress.update_progress(50, 100);
         assert_eq!(progress.done, 50);
         assert_eq!(progress.size, 100);
+
+        let serialized = bincode::serialize(&progress).unwrap();
+        let deserialized: ProgressMessage = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.task_id, 1);
+        assert_eq!(deserialized.done, 50);
+        assert_eq!(deserialized.size, 100);
     }
 
     #[test]
@@ -95,14 +101,25 @@ mod tests {
         assert_eq!(error_info.task_id, 1);
         assert_eq!(error_info.error_code, 1001);
         assert!(error_info.error_message.contains("测试错误"));
+
+        let serialized = bincode::serialize(&error_info).unwrap();
+        let deserialized: ErrorMessage = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.task_id, 1);
+        assert_eq!(deserialized.error_code, 1001);
+        assert!(deserialized.error_message.contains("测试错误"));
     }
 
     #[test]
     fn test_result_info() {
         let result_info = ResultMessage::new(1, 10, 5000);
-
         assert_eq!(result_info.task_id, 1);
         assert_eq!(result_info.pages, 10);
         assert_eq!(result_info.words, 5000);
+
+        let serialized = bincode::serialize(&result_info).unwrap();
+        let deserialized: ResultMessage = bincode::deserialize(&serialized).unwrap();
+        assert_eq!(deserialized.task_id, 1);
+        assert_eq!(deserialized.pages, 10);
+        assert_eq!(deserialized.words, 5000);
     }
 }

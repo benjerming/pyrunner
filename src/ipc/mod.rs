@@ -4,5 +4,5 @@ mod receiver;
 mod sender;
 
 pub use channel::create_message_channel;
-pub use receiver::{ConsoleProgressListener, MessageListener, MessageReceiver};
+pub use receiver::{ConsoleProgressListener, MessageListener};
 pub use sender::MessageSender;

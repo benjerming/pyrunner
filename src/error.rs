@@ -3,48 +3,59 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum PyRunnerError {
+    #[allow(dead_code)]
     #[error("任务执行失败: {message}")]
     TaskExecutionFailed { message: String },
 
+    #[allow(dead_code)]
     #[error("任务超时: {task_id}")]
     TaskTimeout { task_id: u64 },
 
+    #[allow(dead_code)]
     #[error("任务被取消: {task_id}")]
     TaskCancelled { task_id: u64 },
 
     #[error(transparent)]
     JoinError(#[from] tokio::task::JoinError),
 
+    #[allow(dead_code)]
     #[error("Python执行错误: {0}")]
     PythonError(String),
 
+    #[allow(dead_code)]
     #[error("Python变量未找到: {variable}")]
     PythonVariableNotFound { variable: String },
 
+    #[allow(dead_code)]
     #[error("Python模块导入失败: {module}")]
     PythonModuleImportFailed { module: String },
 
     #[error(transparent)]
     JniError(#[from] jni::errors::Error),
 
+    #[allow(dead_code)]
     #[error("JNI字符串转换失败")]
     JniStringConversionFailed,
 
     #[error(transparent)]
     IoError(#[from] std::io::Error),
 
+    #[allow(dead_code)]
     #[error("文件不存在: {path}")]
     FileNotFound { path: String },
 
+    #[allow(dead_code)]
     #[error("权限不足: {path}")]
     PermissionDenied { path: String },
 
     #[error(transparent)]
     JsonError(#[from] serde_json::Error),
 
+    #[allow(dead_code)]
     #[error("进程创建失败: {0}")]
     ProcessCreationFailed(String),
 
+    #[allow(dead_code)]
     #[error("进程执行失败: 退出码 {exit_code}")]
     ProcessExecutionFailed { exit_code: i32 },
 
@@ -55,33 +66,43 @@ pub enum PyRunnerError {
     #[error(transparent)]
     EnvVarError(#[from] std::env::VarError),
 
+    #[allow(dead_code)]
     #[error("消息发送失败: {0}")]
     MessageSendError(String),
 
+    #[allow(dead_code)]
     #[error("消息接收失败: {0}")]
     MessageReceiveError(String),
 
+    #[allow(dead_code)]
     #[error("通道已关闭")]
     ChannelClosed,
 
+    #[allow(dead_code)]
     #[error("配置错误: {message}")]
     ConfigError { message: String },
 
+    #[allow(dead_code)]
     #[error("参数无效: {parameter} = {value}")]
     InvalidParameter { parameter: String, value: String },
 
+    #[allow(dead_code)]
     #[error("内部错误: {message}")]
     InternalError { message: String },
 
+    #[allow(dead_code)]
     #[error("不支持的操作: {operation}")]
     UnsupportedOperation { operation: String },
 
+    #[allow(dead_code)]
     #[error("资源不足: {resource}")]
     ResourceExhausted { resource: String },
 
+    #[allow(dead_code)]
     #[error("超时: {operation}")]
     Timeout { operation: String },
 
+    #[allow(dead_code)]
     #[error(transparent)]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -89,46 +110,55 @@ pub enum PyRunnerError {
 pub type Result<T> = std::result::Result<T, PyRunnerError>;
 
 impl PyRunnerError {
+    #[allow(dead_code)]
     pub fn task_execution_failed<S: Into<String>>(message: S) -> Self {
         Self::TaskExecutionFailed {
             message: message.into(),
         }
     }
 
+    #[allow(dead_code)]
     pub fn task_timeout(task_id: u64) -> Self {
         Self::TaskTimeout { task_id }
     }
 
+    #[allow(dead_code)]
     pub fn python_error<S: Into<String>>(message: S) -> Self {
         Self::PythonError(message.into())
     }
 
+    #[allow(dead_code)]
     pub fn python_variable_not_found<S: Into<String>>(variable: S) -> Self {
         Self::PythonVariableNotFound {
             variable: variable.into(),
         }
     }
 
+    #[allow(dead_code)]
     pub fn file_not_found<S: Into<String>>(path: S) -> Self {
         Self::FileNotFound { path: path.into() }
     }
 
+    #[allow(dead_code)]
     pub fn permission_denied<S: Into<String>>(path: S) -> Self {
         Self::PermissionDenied { path: path.into() }
     }
 
+    #[allow(dead_code)]
     pub fn config_error<S: Into<String>>(message: S) -> Self {
         Self::ConfigError {
             message: message.into(),
         }
     }
 
+    #[allow(dead_code)]
     pub fn internal_error<S: Into<String>>(message: S) -> Self {
         Self::InternalError {
             message: message.into(),
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
@@ -141,6 +171,7 @@ impl PyRunnerError {
         )
     }
 
+    #[allow(dead_code)]
     pub fn is_fatal(&self) -> bool {
         matches!(
             self,
@@ -185,6 +216,7 @@ impl PyRunnerError {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ErrorContext {
     pub operation: String,
@@ -193,6 +225,7 @@ pub struct ErrorContext {
     pub additional_info: std::collections::HashMap<String, String>,
 }
 
+#[allow(dead_code)]
 impl ErrorContext {
     pub fn new<S: Into<String>>(operation: S) -> Self {
         Self {
@@ -219,6 +252,7 @@ impl ErrorContext {
     }
 }
 
+#[allow(dead_code)]
 impl fmt::Display for ErrorContext {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "操作: {}", self.operation)?;
@@ -239,24 +273,28 @@ impl fmt::Display for ErrorContext {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub struct ContextualError {
     pub error: PyRunnerError,
     pub context: ErrorContext,
 }
 
+#[allow(dead_code)]
 impl fmt::Display for ContextualError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{} ({})", self.error, self.context)
     }
 }
 
+#[allow(dead_code)]
 impl std::error::Error for ContextualError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         Some(&self.error)
     }
 }
 
+#[allow(dead_code)]
 pub trait ResultExt<T> {
     fn with_context<F>(self, f: F) -> std::result::Result<T, ContextualError>
     where
@@ -268,6 +306,7 @@ pub trait ResultExt<T> {
     ) -> std::result::Result<T, ContextualError>;
 }
 
+#[allow(dead_code)]
 impl<T> ResultExt<T> for Result<T> {
     fn with_context<F>(self, f: F) -> std::result::Result<T, ContextualError>
     where

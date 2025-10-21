@@ -1,16 +1,26 @@
 use crate::error::{PyRunnerError, Result};
-use crate::ipc::MessageSender;
-use std::sync::Arc;
-use tracing::{error, info};
+use crate::ipc::{MessageListener, MessageSender, create_message_channel};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use tracing::{Span, error, info, info_span, instrument};
 
 pub enum TaskExecutor {
-    Thread {
-        task_function: Arc<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>,
-    },
+    Thread(Arc<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>),
 
-    Process {
-        task_function: Box<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>,
-    },
+    Process(Box<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>),
+}
+
+impl std::fmt::Debug for TaskExecutor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Thread(_) => {
+                write!(f, "TaskExecutor::Thread")
+            }
+            Self::Process(_) => {
+                write!(f, "TaskExecutor::Process")
+            }
+        }
+    }
 }
 
 impl TaskExecutor {
@@ -18,18 +28,14 @@ impl TaskExecutor {
     where
         F: Fn(&MessageSender, u64) -> Result<()> + Send + Sync + 'static,
     {
-        Self::Thread {
-            task_function: Arc::new(task_function),
-        }
+        Self::Thread(Arc::new(task_function))
     }
 
     pub fn new_process<F>(task_function: F) -> Self
     where
         F: Fn(&MessageSender, u64) -> Result<()> + Send + Sync + 'static,
     {
-        Self::Process {
-            task_function: Box::new(task_function),
-        }
+        Self::Process(Box::new(task_function))
     }
 
     pub fn execute(&self, task_id: u64, sender: &MessageSender) -> Result<()> {
@@ -39,15 +45,16 @@ impl TaskExecutor {
 
     pub async fn execute_async(&self, task_id: u64, sender: &MessageSender) -> Result<()> {
         match self {
-            Self::Thread { task_function } => {
+            Self::Thread(task_function) => {
                 self.execute_thread(task_id, sender, task_function).await
             }
-            Self::Process { task_function } => {
+            Self::Process(task_function) => {
                 self.execute_process(task_id, sender, task_function).await
             }
         }
     }
 
+    #[instrument(skip(self, sender, task_function))]
     async fn execute_thread(
         &self,
         task_id: u64,
@@ -87,6 +94,7 @@ impl TaskExecutor {
         }
     }
 
+    #[instrument(skip(self, sender, task_function))]
     async fn execute_process(
         &self,
         task_id: u64,
@@ -214,19 +222,61 @@ impl TaskExecutor {
             }
         }
     }
+
+    pub async fn run_with_monitoring(
+        &self,
+        task_id: u64,
+        listener: Arc<Mutex<dyn MessageListener + Send + Sync + 'static>>,
+    ) -> Result<()> {
+        let (sender, receiver) = create_message_channel(listener);
+
+        let parent_span = Span::current();
+        let monitor_handle = tokio::task::spawn_blocking(move || {
+            parent_span.in_scope(|| {
+                receiver.start_listening();
+            });
+        });
+
+        match self.execute_async(task_id, &sender).await {
+            Ok(()) => info!("任务执行成功"),
+            Err(e) => {
+                let msg = format!("任务执行失败: {e:?}");
+                error!("任务执行失败: {e:?}");
+                return Err(PyRunnerError::task_execution_failed(msg));
+            }
+        }
+        info!("关闭发送器连接");
+        drop(sender);
+
+        match monitor_handle.await {
+            Ok(()) => info!("回收监听器线程成功"),
+            Err(e) => {
+                let msg = format!("回收监听器线程失败: {e:?}");
+                error!("回收监听器线程失败: {e:?}");
+                return Err(PyRunnerError::task_execution_failed(msg));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::create_message_channel;
+    use crate::ipc::{ConsoleProgressListener, create_message_channel};
     use std::sync::{Arc, Mutex};
     use std::thread;
     use std::time::Duration;
+    use tracing::debug;
 
     #[test]
     fn test_thread_task_executor() {
-        let (sender, receiver) = create_message_channel();
+        let listener = Arc::new(Mutex::new(ConsoleProgressListener::new(
+            1,
+            tracing::Span::current(),
+        )));
+        let (sender, receiver) = create_message_channel(listener);
 
         let task_fn = |sender: &MessageSender, task_id: u64| -> Result<()> {
             use std::thread;
@@ -235,10 +285,10 @@ mod tests {
             for i in 1..=5 {
                 thread::sleep(Duration::from_millis(200));
                 sender.send_task_progress(task_id, i, 5);
-                info!("执行步骤 {}/5", i);
+                debug!("执行步骤 {}/5", i);
             }
 
-            info!("任务执行成功");
+            debug!("任务执行成功");
             Ok(())
         };
 
@@ -272,7 +322,10 @@ mod tests {
 
     #[test]
     fn test_process_task_executor() {
-        let (sender, _receiver) = create_message_channel();
+        let listener = Arc::new(Mutex::new(ConsoleProgressListener::new(
+            2,
+            tracing::Span::current(),
+        )));
 
         let task_fn = |_sender: &MessageSender, _task_id: u64| -> Result<()> {
             use std::thread;
@@ -289,7 +342,8 @@ mod tests {
 
         let executor = TaskExecutor::new_process(task_fn);
 
-        let result = executor.execute(1, &sender);
+        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
+        let result = rt.block_on(executor.run_with_monitoring(2, listener));
 
         assert!(result.is_ok());
     }

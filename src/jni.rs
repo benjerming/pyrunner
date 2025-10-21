@@ -6,6 +6,7 @@ use jni::sys::{jboolean, jfloat, jint, jstring};
 #[allow(unused_imports)]
 use tracing::{debug, error, info, trace, warn};
 
+#[allow(dead_code)]
 const TAG: &str = "libpr";
 
 fn init_logger() {
@@ -161,9 +162,11 @@ fn jstring_to_string(env: &mut JNIEnv, jstring: jstring) -> Result<String> {
         .into())
 }
 
-fn run_python_pdf2wps(sender: MessageSender, task_id: u64) {}
+#[allow(dead_code)]
+fn run_python_pdf2wps(_sender: MessageSender, _task_id: u64) {}
 
-fn run_python_raw2wps(sender: MessageSender, task_id: u64) {}
+#[allow(dead_code)]
+fn run_python_raw2wps(_sender: MessageSender, _task_id: u64) {}
 
 fn pdf2wps(
     env: &mut JNIEnv,
@@ -171,9 +174,9 @@ fn pdf2wps(
     pdf_password: jstring,
     wps_path: jstring,
 ) -> Result<()> {
-    let pdf_path: String = jstring_to_string(env, pdf_path)?;
-    let pdf_password: String = jstring_to_string(env, pdf_password)?;
-    let wps_path: String = jstring_to_string(env, wps_path)?;
+    let _pdf_path: String = jstring_to_string(env, pdf_path)?;
+    let _pdf_password: String = jstring_to_string(env, pdf_password)?;
+    let _wps_path: String = jstring_to_string(env, wps_path)?;
     Ok(())
 }
 
