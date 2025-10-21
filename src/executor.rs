@@ -1,26 +1,12 @@
 use crate::error::{PyRunnerError, Result};
 use crate::ipc::{MessageListener, MessageSender, create_message_channel};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use tracing::{Span, error, info, info_span, instrument};
+use tracing::{Span, error, info, instrument};
 
 pub enum TaskExecutor {
     Thread(Arc<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>),
 
     Process(Box<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>),
-}
-
-impl std::fmt::Debug for TaskExecutor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Thread(_) => {
-                write!(f, "TaskExecutor::Thread")
-            }
-            Self::Process(_) => {
-                write!(f, "TaskExecutor::Process")
-            }
-        }
-    }
 }
 
 impl TaskExecutor {
@@ -31,6 +17,7 @@ impl TaskExecutor {
         Self::Thread(Arc::new(task_function))
     }
 
+    #[cfg(unix)]
     pub fn new_process<F>(task_function: F) -> Self
     where
         F: Fn(&MessageSender, u64) -> Result<()> + Send + Sync + 'static,
@@ -38,9 +25,13 @@ impl TaskExecutor {
         Self::Process(Box::new(task_function))
     }
 
-    pub fn execute(&self, task_id: u64, sender: &MessageSender) -> Result<()> {
-        let rt = tokio::runtime::Runtime::new()?;
-        rt.block_on(self.execute_async(task_id, sender))
+    #[cfg(windows)]
+    pub fn new_process<F>(task_function: F) -> Self
+    where
+        F: Fn(&MessageSender, u64) -> Result<()> + Send + Sync + 'static,
+    {
+        warn!("Windows系统不支持fork，使用线程模拟子进程执行");
+        Self::Thread(Arc::new(task_function))
     }
 
     pub async fn execute_async(&self, task_id: u64, sender: &MessageSender) -> Result<()> {
@@ -103,28 +94,6 @@ impl TaskExecutor {
     ) -> Result<()> {
         info!("开始执行任务 (任务ID: {})", task_id);
 
-        #[cfg(unix)]
-        {
-            self.execute_with_fork(task_id, sender, task_function).await
-        }
-
-        #[cfg(windows)]
-        {
-            use tracing::warn;
-
-            warn!("Windows系统不支持fork，使用线程模拟子进程执行");
-            self.execute_with_thread(task_id, sender, task_function)
-                .await
-        }
-    }
-
-    #[cfg(unix)]
-    async fn execute_with_fork(
-        &self,
-        task_id: u64,
-        sender: &MessageSender,
-        task_function: &Box<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>,
-    ) -> Result<()> {
         use nix::sys::wait::{WaitStatus, waitpid};
         use nix::unistd::{ForkResult, fork, getpid};
         use std::process;
@@ -200,29 +169,6 @@ impl TaskExecutor {
         }
     }
 
-    #[cfg(windows)]
-    async fn execute_with_thread(
-        &self,
-        task_id: u64,
-        sender: &MessageSender,
-        task_function: &Box<dyn Fn(&MessageSender, u64) -> Result<()> + Send + Sync>,
-    ) -> Result<()> {
-        match task_function(sender, task_id) {
-            Ok(()) => {
-                sender.send_task_completed(task_id);
-                info!("task_id: {task_id} 线程任务执行成功");
-                Ok(())
-            }
-            Err(e) => {
-                error!("task_id: {task_id} 线程任务执行失败: {e}");
-                let msg = format!("task_id: {task_id} 线程任务执行失败: {e}");
-                let error = PyRunnerError::task_execution_failed(msg);
-                sender.send_task_error(task_id, &error);
-                Err(error)
-            }
-        }
-    }
-
     pub async fn run_with_monitoring(
         &self,
         task_id: u64,
@@ -264,87 +210,75 @@ impl TaskExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipc::{ConsoleProgressListener, create_message_channel};
+    use crate::ipc::{ErrorMessage, ProgressMessage, ResultMessage};
     use std::sync::{Arc, Mutex};
-    use std::thread;
-    use std::time::Duration;
-    use tracing::debug;
+
+    #[derive(Default)]
+    struct TestListener {
+        progress_count: u32,
+        error_count: u32,
+        result_count: u32,
+    }
+
+    impl MessageListener for TestListener {
+        fn on_progress(&mut self, _progress: &ProgressMessage) {
+            self.progress_count += 1;
+        }
+        fn on_error(&mut self, _error: &ErrorMessage) {
+            self.error_count += 1;
+        }
+        fn on_result(&mut self, _result: &ResultMessage) {
+            self.result_count += 1;
+        }
+    }
 
     #[test]
     fn test_thread_task_executor() {
-        let listener = Arc::new(Mutex::new(ConsoleProgressListener::new(
-            1,
-            tracing::Span::current(),
-        )));
-        let (sender, receiver) = create_message_channel(listener);
+        let task_id = 1;
+        let listener = Arc::new(Mutex::new(TestListener::default()));
 
-        let task_fn = |sender: &MessageSender, task_id: u64| -> Result<()> {
-            use std::thread;
-            use std::time::Duration;
-
-            for i in 1..=5 {
-                thread::sleep(Duration::from_millis(200));
-                sender.send_task_progress(task_id, i, 5);
-                debug!("执行步骤 {}/5", i);
-            }
-
-            debug!("任务执行成功");
+        let task_fn = move |sender: &MessageSender, _task_id: u64| -> Result<()> {
+            assert_eq!(_task_id, task_id);
+            sender.send_task_progress(task_id, 1, 1);
+            sender.send_task_completed(task_id);
+            sender.send_task_error_msg(task_id, "test error".to_string());
             Ok(())
         };
 
         let executor = TaskExecutor::new_thread(task_fn);
-
-        let messages = Arc::new(Mutex::new(Vec::new()));
-        let messages_clone = messages.clone();
-
-        thread::spawn(move || {
-            loop {
-                match receiver.try_recv_timeout(Duration::from_secs(3)) {
-                    Ok(msg) => {
-                        info!("收到消息: {:?}", msg);
-                        let mut msgs = messages_clone.lock().unwrap();
-                        msgs.push(msg);
-                    }
-                    Err(e) => {
-                        error!("接收消息失败: {:?}", e);
-                        break;
-                    }
-                }
-            }
-        });
-
-        let result = executor.execute(1, &sender);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(executor.run_with_monitoring(1, listener.clone()));
         assert!(result.is_ok());
 
-        let messages = messages.lock().unwrap();
-        assert!(messages.len() >= 5);
+        let guard = listener.lock().unwrap();
+        assert_eq!(guard.progress_count, 1);
+        assert_eq!(guard.error_count, 1);
+        assert_eq!(guard.result_count, 1);
     }
 
     #[test]
     fn test_process_task_executor() {
-        let listener = Arc::new(Mutex::new(ConsoleProgressListener::new(
-            2,
-            tracing::Span::current(),
-        )));
+        let task_id = 2;
+        let listener = Arc::new(Mutex::new(TestListener::default()));
 
-        let task_fn = |_sender: &MessageSender, _task_id: u64| -> Result<()> {
-            use std::thread;
-            use std::time::Duration;
-
-            for i in 1..=3 {
-                thread::sleep(Duration::from_millis(50));
-                info!("执行步骤 {}/3", i);
-            }
-
-            info!("任务执行成功");
+        let task_fn = move |sender: &MessageSender, _task_id: u64| -> Result<()> {
+            assert_eq!(_task_id, task_id);
+            sender.send_task_progress(task_id, 1, 1);
+            sender.send_task_completed(task_id);
+            sender.send_task_error_msg(task_id, "test error".to_string());
             Ok(())
         };
 
         let executor = TaskExecutor::new_process(task_fn);
 
-        let rt = tokio::runtime::Runtime::new().expect("failed to create tokio runtime");
-        let result = rt.block_on(executor.run_with_monitoring(2, listener));
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(executor.run_with_monitoring(2, listener.clone()));
 
         assert!(result.is_ok());
+        let guard = listener.lock().unwrap();
+
+        assert_eq!(guard.progress_count, 1);
+        assert_eq!(guard.error_count, 1);
+        assert_eq!(guard.result_count, 1);
     }
 }
